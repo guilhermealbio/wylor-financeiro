@@ -1,0 +1,16 @@
+[
+  { "rota": "/", "titulo": "Dashboard" },
+  { "rota": "/contas-bancarias", "titulo": "Contas bancárias" },
+  { "rota": "/fluxo-de-caixa", "titulo": "Fluxo de caixa" },
+  { "rota": "/receitas", "titulo": "Receitas" },
+  { "rota": "/despesas", "titulo": "Despesas" },
+  { "rota": "/contas-a-pagar", "titulo": "Contas a pagar" },
+  { "rota": "/contas-a-receber", "titulo": "Contas a receber" },
+  { "rota": "/vendas-e-marketplaces", "titulo": "Vendas e marketplaces" },
+  { "rota": "/produtos-e-estoque", "titulo": "Produtos e estoque" },
+  { "rota": "/custos-e-precificacao", "titulo": "Custos e precificação" },
+  { "rota": "/fornecedores", "titulo": "Fornecedores" },
+  { "rota": "/socios-e-retiradas", "titulo": "Sócios e retiradas" },
+  { "rota": "/relatorios-e-dre", "titulo": "Relatórios e DRE" },
+  { "rota": "/configuracoes", "titulo": "Configurações" }
+]
