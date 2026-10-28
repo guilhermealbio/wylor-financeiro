@@ -8,6 +8,9 @@
     <title>WYLOR Financeiro</title>
     <link rel="icon" href="assets/favicon.svg" type="image/svg+xml" />
     <link rel="stylesheet" href="styles.css" />
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.117.0/dist/umd/supabase.min.js" defer></script>
+    <script src="assets/supabase-auth.js" defer></script>
+    <script src="assets/supabase-config.js" defer></script>
     <script src="app.js" defer></script>
   </head>
   <body>
@@ -35,7 +38,7 @@
           <div class="breadcrumbs"><span>WYLOR</span><span class="crumb-separator">/</span><strong id="breadcrumb-current">Dashboard</strong></div>
           <div class="topbar-actions">
             <span class="environment-pill"><span></span> AMBIENTE EM CONFIGURAÇÃO</span>
-            <button class="profile-button" type="button" aria-label="Perfil indisponível até conectar o acesso"><span class="profile-avatar">W</span><span class="profile-copy"><strong>Acesso pendente</strong><small>Configure sua conta</small></span><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m7 10 5 5 5-5"/></svg></button>
+            <button class="profile-button" id="logout-button" type="button" aria-label="Sair da conta"><span class="profile-avatar">W</span><span class="profile-copy"><strong id="profile-name">Conta WYLOR</strong><small id="profile-email">Sessão autenticada</small></span><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m7 10 5 5 5-5"/></svg></button>
           </div>
         </header>
 

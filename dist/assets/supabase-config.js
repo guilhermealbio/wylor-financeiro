@@ -1,0 +1,1 @@
+window.WYLOR_SUPABASE_CONFIG = Object.freeze({ url: "https://jhtptvrfhuprltmkfyfw.supabase.co", anonKey: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImpodHB0dnJmaHVwcmx0bWtmeWZ3Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTMyMDc0NjMsImV4cCI6MjEwODc4MzQ2M30.DnK0Ea26veFj9nCB5D6K3nig42UC-WrM_jfiKeqxc6s" });

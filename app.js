@@ -44,22 +44,65 @@ const moduleDescriptions = {
 const nav = document.querySelector('#primary-nav');
 const page = document.querySelector('#page-content');
 const currentTitle = document.querySelector('#breadcrumb-current');
+const appState = { user: null, profile: null, company: null, availableCompanies: [], accounts: null, dataError: null, authReady: false, workspaceLoaded: false, workspaceLoadingUserId: null };
 const svg = (name, cls = '') => `<svg class="${cls}" viewBox="0 0 24 24" aria-hidden="true">${icons[name]}</svg>`;
 nav.innerHTML = navItems.map(([id, title, icon]) => `<a class="nav-link" href="#${id}" data-page="${id}">${svg(icon, 'nav-icon')}<span>${title}</span></a>`).join('');
 
 const emptyState = (heading, description, icon = 'empty') => `<div class="empty-state"><span class="empty-icon">${svg(icon)}</span><strong>${heading}</strong><p>${description}</p></div>`;
-const metric = (label, note, icon) => `<article class="metric-card"><div class="metric-top"><span class="metric-label">${label}</span><span class="metric-icon">${svg(icon)}</span></div><div class="metric-value">Sem dados</div><div class="metric-note">${note}</div></article>`;
+const escapeHTML = value => String(value ?? '').replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char]);
+function decimalToCents(value) {
+  const match = /^(-?)(\d+)(?:\.(\d{1,2}))?$/.exec(String(value));
+  if (!match) return 0n;
+  const cents = BigInt(match[2]) * 100n + BigInt((match[3] || '').padEnd(2, '0'));
+  return match[1] ? -cents : cents;
+}
+function formatBRL(cents) {
+  const negative = cents < 0n;
+  const absolute = negative ? -cents : cents;
+  const whole = (absolute / 100n).toLocaleString('pt-BR');
+  const fraction = String(absolute % 100n).padStart(2, '0');
+  return `${negative ? '-' : ''}R$ ${whole},${fraction}`;
+}
+function getBalanceStatus() {
+  if (appState.dataError) return { value: 'Não foi possível consultar', note: 'Tente carregar os dados novamente' };
+  if (appState.accounts === null) return { value: 'Carregando', note: 'Consultando as contas da empresa' };
+  if (appState.accounts.length === 0) return { value: 'Sem contas cadastradas', note: 'Cadastre uma conta bancária' };
+  const knownBalances = appState.accounts.filter(account => account.opening_balance !== null);
+  if (knownBalances.length !== appState.accounts.length) {
+    return { value: knownBalances.length ? 'Saldo incompleto' : 'Saldo inicial pendente', note: 'Informe o saldo inicial de cada conta' };
+  }
+  const cents = knownBalances.reduce((total, account) => total + decimalToCents(account.opening_balance), 0n);
+  return { value: formatBRL(cents), note: `Saldo inicial informado em ${knownBalances.length} ${knownBalances.length === 1 ? 'conta' : 'contas'}` };
+}
+const accountTypeNames = { checking: 'Conta corrente', savings: 'Poupança', payment: 'Conta de pagamento', investment: 'Investimento', other: 'Outra conta' };
+function renderBankAccounts(title, icon) {
+  const accounts = appState.accounts || [];
+  const rows = appState.dataError
+    ? `${emptyState('Não foi possível carregar as contas', 'Verifique sua conexão e tente novamente.', 'alert')}<div class="retry-row"><button class="text-button" type="button" data-retry-data>Tentar carregar novamente</button></div>`
+    : appState.accounts === null
+      ? '<div class="data-loading" aria-busy="true">Carregando contas bancárias...</div>'
+      : accounts.length
+        ? `<div class="account-list">${accounts.map(account => `<article class="account-row"><span class="module-symbol">${svg('bank')}</span><div class="account-main"><strong>${escapeHTML(account.name)}</strong><small>${escapeHTML(account.bank_name || accountTypeNames[account.account_type] || 'Conta bancária')} · ${accountTypeNames[account.account_type] || 'Conta'}</small></div><div class="account-balance"><strong>${account.opening_balance === null ? 'Saldo inicial pendente' : formatBRL(decimalToCents(account.opening_balance))}</strong><small>${account.opening_balance_date ? `Posição em ${formatDate(account.opening_balance_date)}` : 'Saldo não informado'}</small></div></article>`).join('')}</div>`
+        : emptyState('Nenhuma conta cadastrada', 'Cadastre a primeira conta da empresa. O saldo inicial é opcional e não será tratado como receita.', 'bank');
+  return `<section aria-labelledby="page-title"><div class="page-heading"><div><p class="eyebrow">WYLOR Financeiro</p><h1 id="page-title">${title}</h1><p class="page-description">Contas e saldos iniciais cadastrados pela equipe autorizada.</p></div></div>
+    <div class="accounts-layout"><section class="content-card"><div class="card-heading"><h2>Contas cadastradas</h2><span>${accounts.length} ${accounts.length === 1 ? 'conta' : 'contas'}</span></div>${rows}</section>
+    <section class="content-card account-form-card"><div class="card-heading"><h2>Adicionar conta bancária</h2><span>BRL</span></div><form id="account-form" class="data-form"><label>Nome da conta<input name="name" maxlength="120" autocomplete="off" placeholder="Ex.: Conta principal" required /></label><label>Banco ou instituição <span class="optional">Opcional</span><input name="bank_name" maxlength="120" autocomplete="organization" placeholder="Nome da instituição" /></label><label>Tipo de conta<select name="account_type" required><option value="checking">Conta corrente</option><option value="savings">Poupança</option><option value="payment">Conta de pagamento</option><option value="investment">Investimento</option><option value="other">Outra conta</option></select></label><div class="form-grid"><label>Saldo inicial <span class="optional">Opcional</span><input name="opening_balance" type="number" inputmode="decimal" step="0.01" placeholder="0,00" /></label><label>Data do saldo<input name="opening_balance_date" type="date" /></label></div><p class="form-hint">O saldo inicial é uma posição da conta, não uma receita.</p><p class="form-message" id="account-message" role="status" aria-live="polite"></p><button class="primary-button" type="submit">Salvar conta</button></form></section></div>
+  </section>`;
+}
+const metric = (label, note, icon, value = 'Módulo pendente') => `<article class="metric-card"><div class="metric-top"><span class="metric-label">${label}</span><span class="metric-icon">${svg(icon)}</span></div><div class="metric-value">${value}</div><div class="metric-note">${note}</div></article>`;
 function renderDashboard() {
+  const balance = getBalanceStatus();
+  const companyName = escapeHTML(appState.company?.fantasy_name || 'empresa');
   return `<section aria-labelledby="page-title">
-    <div class="page-heading"><div><p class="eyebrow">Visão geral</p><h1 id="page-title">Dashboard</h1><p class="page-description">Acompanhe a saúde financeira da WYLOR em um só lugar.</p></div><div class="period-label">${svg('calendar')}<span>Período atual</span></div></div>
-    <div class="setup-banner"><span class="banner-icon">${svg('alert')}</span><div><strong>Conecte o Supabase para iniciar</strong><p>Ainda não há uma fonte de dados vinculada. Os indicadores abaixo aguardam a conexão e os primeiros registros financeiros.</p></div></div>
+    <div class="page-heading"><div><p class="eyebrow">Visão geral</p><h1 id="page-title">Dashboard</h1><p class="page-description">Acompanhe a saúde financeira de ${companyName} em um só lugar.</p></div><div class="period-label">${svg('calendar')}<span>Período atual</span></div></div>
+    <div class="setup-banner"><span class="banner-icon">${svg('alert')}</span><div><strong>Indicadores ligados aos dados da empresa</strong><p>O saldo usa as contas bancárias e os saldos iniciais informados. Receitas, despesas e compromissos serão conectados quando esses módulos forem desenvolvidos.</p>${appState.dataError ? '<button class="text-button" type="button" data-retry-data>Tentar carregar novamente</button>' : ''}</div></div>
     <div class="metrics-grid" aria-label="Indicadores financeiros sem dados disponíveis">
-      ${metric('Saldo total das contas', 'Cadastre contas para acompanhar os saldos', 'bank')}
-      ${metric('Receitas do mês', 'Sem lançamentos de receita', 'income')}
-      ${metric('Despesas do mês', 'Sem lançamentos de despesa', 'expense')}
-      ${metric('Resultado do período', 'Calculado após os primeiros lançamentos', 'flow')}
-      ${metric('Contas a pagar', 'Nenhuma conta cadastrada', 'payable')}
-      ${metric('Contas a receber', 'Nenhuma conta cadastrada', 'receivable')}
+      ${metric('Saldo total das contas', balance.note, 'bank', balance.value)}
+      ${metric('Receitas do mês', 'Aguardando o módulo de receitas', 'income')}
+      ${metric('Despesas do mês', 'Aguardando o módulo de despesas', 'expense')}
+      ${metric('Resultado do período', 'Disponível após receitas e despesas', 'flow')}
+      ${metric('Contas a pagar', 'Aguardando o módulo de contas a pagar', 'payable')}
+      ${metric('Contas a receber', 'Aguardando o módulo de contas a receber', 'receivable')}
     </div>
     <div class="dashboard-grid">
       <section class="content-card" aria-labelledby="activity-heading"><div class="card-heading"><h2 id="activity-heading">Movimentação financeira</h2><span>Período atual</span></div>${emptyState('Nenhuma movimentação disponível','Quando os lançamentos estiverem configurados, a atividade financeira aparecerá aqui.')}</section>
@@ -69,12 +112,14 @@ function renderDashboard() {
 }
 function renderModule(id) {
   const [, title, icon] = navItems.find(([key]) => key === id) || navItems[0];
+  if (id === 'bank_accounts') return renderBankAccounts(title, icon);
   return `<section aria-labelledby="page-title"><div class="page-heading"><div><p class="eyebrow">WYLOR Financeiro</p><h1 id="page-title">${title}</h1><p class="page-description">Área de ${title.toLocaleLowerCase('pt-BR')} da operação financeira da WYLOR.</p></div></div>
     <div class="module-intro"><span class="module-symbol">${svg(icon)}</span><div><h2>Módulo em desenvolvimento</h2><p>${moduleDescriptions[id]}</p><span class="module-status">Disponível após configurar o acesso aos dados</span></div></div>
     <div class="foundation-note">${svg('lock')}<span>Esta tela é apenas a estrutura de navegação. Nenhuma operação ou dado financeiro está sendo simulado.</span></div>
   </section>`;
 }
 function navigate() {
+  if (!appState.user || !appState.company) return;
   const requested = location.hash.slice(1) || 'dashboard';
   const item = navItems.find(([id]) => id === requested) || navItems[0];
   const [id, title] = item;
@@ -86,6 +131,7 @@ function navigate() {
     else link.removeAttribute('aria-current');
   });
   closeMenu();
+  if (id === 'dashboard' || id === 'bank_accounts') loadBankAccounts();
 }
 function closeMenu() {
   document.body.classList.remove('menu-open');
@@ -100,3 +146,276 @@ document.querySelector('#scrim').addEventListener('click', closeMenu);
 window.addEventListener('hashchange', navigate);
 window.addEventListener('keydown', event => { if (event.key === 'Escape') closeMenu(); });
 navigate();
+
+function formatDate(value) {
+  const date = new Date(`${value}T12:00:00Z`);
+  return Number.isNaN(date.getTime()) ? '' : new Intl.DateTimeFormat('pt-BR', { timeZone: 'UTC' }).format(date);
+}
+function authRedirect() {
+  return window.location.origin + window.location.pathname;
+}
+function setFormMessage(selector, message, isError = false) {
+  const element = document.querySelector(selector);
+  if (!element) return;
+  element.textContent = message;
+  element.classList.toggle('is-error', isError);
+}
+function renderAuth(view = 'login', notice = '') {
+  document.body.classList.add('auth-mode');
+  const views = {
+    login: { title: 'Acesse sua conta', description: 'Entre para acompanhar as informações financeiras da WYLOR.', button: 'Entrar', fields: `<label>E-mail<input name="email" type="email" autocomplete="email" required /></label><label>Senha<input name="password" type="password" autocomplete="current-password" required /></label>`, links: `<button class="text-button" type="button" data-auth-view="forgot">Esqueci minha senha</button><span>Não tem uma conta? <button class="text-button" type="button" data-auth-view="signup">Criar conta</button></span>` },
+    signup: { title: 'Crie seu acesso', description: 'Use seu e-mail de trabalho. Enviaremos uma mensagem para confirmar o endereço.', button: 'Criar acesso', fields: `<label>Seu nome<input name="full_name" maxlength="120" autocomplete="name" required /></label><label>E-mail<input name="email" type="email" autocomplete="email" required /></label><label>Senha<input name="password" type="password" autocomplete="new-password" minlength="8" required /><small class="field-hint">Use pelo menos 8 caracteres.</small></label>`, links: `<span>Já tem uma conta? <button class="text-button" type="button" data-auth-view="login">Entrar</button></span>` },
+    forgot: { title: 'Recuperar senha', description: 'Informe o e-mail da sua conta para receber um link seguro de recuperação.', button: 'Enviar link', fields: `<label>E-mail<input name="email" type="email" autocomplete="email" required /></label>`, links: `<button class="text-button" type="button" data-auth-view="login">Voltar para entrar</button>` },
+    newPassword: { title: 'Defina uma nova senha', description: 'Escolha uma senha nova para acessar sua conta.', button: 'Salvar nova senha', fields: `<label>Nova senha<input name="password" type="password" autocomplete="new-password" minlength="8" required /></label><label>Confirme a nova senha<input name="password_confirm" type="password" autocomplete="new-password" minlength="8" required /></label>`, links: '' }
+  };
+  const current = views[view] || views.login;
+  page.innerHTML = `<section class="auth-layout" aria-labelledby="auth-title"><div class="auth-brand-panel"><a class="brand" href="#dashboard"><span class="brand-mark" aria-hidden="true">W</span><span class="brand-copy"><strong>WYLOR</strong><small>FINANCEIRO</small></span></a><div class="auth-brand-message"><p class="eyebrow">Gestão financeira empresarial</p><h1>Clareza para cuidar da operação.</h1><p>Contas e informações da empresa em um ambiente organizado e protegido.</p></div><span class="auth-footnote">Acesso restrito a usuários autorizados.</span></div><div class="auth-form-panel"><div class="auth-form-wrap"><span class="auth-lock">${svg('lock')}</span><p class="eyebrow">Área segura</p><h2 id="auth-title">${current.title}</h2><p class="auth-description">${current.description}</p>${view === 'newPassword' ? '' : `<div class="auth-tabs" role="tablist" aria-label="Tipo de acesso"><button type="button" role="tab" aria-selected="${view === 'login'}" data-auth-view="login">Entrar</button><button type="button" role="tab" aria-selected="${view === 'signup'}" data-auth-view="signup">Criar conta</button></div>`}<form id="auth-form" data-auth-action="${view}" class="data-form auth-form">${current.fields}<p class="form-message" id="auth-message" role="status" aria-live="polite">${escapeHTML(notice)}</p><button class="primary-button" type="submit">${current.button}</button></form><div class="auth-links">${current.links}</div><p class="auth-security">${svg('check')} Seus dados são protegidos pelo acesso da sua empresa.</p></div></div></section>`;
+}
+function renderCompanySetup(errorMessage = '') {
+  document.body.classList.remove('auth-mode');
+  page.innerHTML = `<section class="company-setup" aria-labelledby="page-title"><div class="company-setup-card"><span class="auth-lock">${svg('bank')}</span><p class="eyebrow">Primeiro acesso</p><h1 id="page-title">Cadastre sua empresa</h1><p class="page-description">A empresa será vinculada à sua conta. O saldo inicial poderá ser informado ao cadastrar as contas bancárias.</p><form id="company-form" class="data-form"><label>Nome fantasia<input name="fantasy_name" maxlength="160" value="WYLOR" required /></label><label>Razão social <span class="optional">Opcional</span><input name="legal_name" maxlength="200" /></label><label>CNPJ <span class="optional">Opcional</span><input name="cnpj" inputmode="numeric" autocomplete="off" maxlength="18" placeholder="00.000.000/0000-00" /></label><label>Início do controle financeiro<input name="control_start_date" type="date" required /></label><div class="company-fixed-values"><span>Moeda <strong>Real brasileiro (BRL)</strong></span><span>Fuso horário <strong>America/Sao_Paulo</strong></span></div><p class="form-message ${errorMessage ? 'is-error' : ''}" id="company-message" role="status" aria-live="polite">${escapeHTML(errorMessage)}</p><button class="primary-button" type="submit">Salvar dados da empresa</button></form><button type="button" class="text-button signout-button" data-signout>Sair da conta</button></div></section>`;
+}
+function renderWorkspaceError() {
+  document.body.classList.remove('auth-mode');
+  page.innerHTML = `<section class="company-setup" aria-labelledby="page-title"><div class="company-setup-card"><span class="auth-lock">${svg('alert')}</span><p class="eyebrow">Configuração do banco</p><h1 id="page-title">A estrutura está aguardando aplicação</h1><p class="page-description">O acesso ao Supabase está conectado, mas as tabelas iniciais ainda não estão disponíveis. Aplique a mudança preparada neste projeto e tente novamente.</p><p class="form-message is-error" role="status">${escapeHTML(appState.dataError || 'Não foi possível carregar sua empresa.')}</p><button class="primary-button" type="button" data-retry-workspace>Tentar novamente</button><button type="button" class="text-button signout-button" data-signout>Sair da conta</button></div></section>`;
+}
+function renderCompanyPicker(companies) {
+  appState.availableCompanies = companies;
+  document.body.classList.remove('auth-mode');
+  page.innerHTML = `<section class="company-setup" aria-labelledby="page-title"><div class="company-setup-card"><p class="eyebrow">Seus espaços</p><h1 id="page-title">Escolha uma empresa</h1><p class="page-description">Selecione a empresa que deseja acessar.</p><div class="company-options">${companies.map(company => `<button class="company-option" type="button" data-company-id="${escapeHTML(company.id)}"><span>${escapeHTML(company.fantasy_name)}</span><small>BRL · ${escapeHTML(company.time_zone)}</small></button>`).join('')}</div><button type="button" class="text-button signout-button" data-signout>Sair da conta</button></div></section>`;
+}
+function renderAppForCompany(company) {
+  appState.company = company;
+  appState.accounts = null;
+  appState.dataError = null;
+  document.body.classList.remove('auth-mode');
+  const profileName = appState.profile?.full_name || appState.user?.user_metadata?.full_name || 'Conta WYLOR';
+  document.querySelector('#profile-name').textContent = profileName;
+  document.querySelector('#profile-email').textContent = appState.user?.email || '';
+  document.querySelector('#logout-button').setAttribute('aria-label', `Sair da conta ${appState.user?.email || ''}`);
+  navigate();
+}
+async function loadWorkspace(user) {
+  if (appState.user?.id === user.id && (appState.workspaceLoaded || appState.workspaceLoadingUserId === user.id)) return;
+  appState.user = user;
+  appState.workspaceLoadingUserId = user.id;
+  appState.dataError = null;
+  const [profileResult, membershipResult] = await Promise.all([
+    window.wylorSupabase.from('profiles').select('full_name').eq('id', user.id).maybeSingle(),
+    window.wylorSupabase.from('company_members').select('company_id, role, companies(id, fantasy_name, currency, time_zone)').eq('user_id', user.id)
+  ]);
+  if (appState.user?.id !== user.id) return;
+  appState.workspaceLoadingUserId = null;
+  appState.workspaceLoaded = true;
+  if (membershipResult.error) {
+    appState.dataError = 'As tabelas do sistema ainda não estão acessíveis. Aplique a estrutura inicial do banco e tente novamente.';
+    renderWorkspaceError();
+    return;
+  }
+  appState.profile = profileResult.data || null;
+  const companies = (membershipResult.data || []).map(row => row.companies).filter(Boolean);
+  if (!companies.length) {
+    renderCompanySetup();
+    return;
+  }
+  if (companies.length > 1) {
+    renderCompanyPicker(companies);
+    return;
+  }
+  renderAppForCompany(companies[0]);
+}
+async function loadBankAccounts() {
+  if (!appState.user || !appState.company || appState.accounts !== null) return;
+  const companyId = appState.company.id;
+  const { data, error } = await window.wylorSupabase.from('bank_accounts')
+    .select('id, name, bank_name, account_type, opening_balance, opening_balance_date, currency')
+    .eq('company_id', companyId).order('name');
+  if (companyId !== appState.company?.id) return;
+  if (error) {
+    appState.dataError = 'Não foi possível consultar as contas bancárias. Tente novamente.';
+    appState.accounts = [];
+  } else {
+    appState.dataError = null;
+    appState.accounts = data || [];
+  }
+  navigate();
+}
+async function createCompany(form) {
+  const values = new FormData(form);
+  const cnpj = String(values.get('cnpj') || '').replace(/\D/g, '');
+  if (cnpj && cnpj.length !== 14) {
+    setFormMessage('#company-message', 'Confira o CNPJ. Ele deve ter 14 números.', true);
+    return;
+  }
+  const button = form.querySelector('button[type="submit"]');
+  button.disabled = true;
+  button.textContent = 'Salvando...';
+  const { data, error } = await window.wylorSupabase.from('companies').insert({
+    fantasy_name: String(values.get('fantasy_name')).trim(),
+    legal_name: String(values.get('legal_name') || '').trim() || null,
+    cnpj: cnpj || null,
+    control_start_date: values.get('control_start_date')
+  }).select('id, fantasy_name, currency, time_zone').single();
+  if (error) {
+    button.disabled = false;
+    button.textContent = 'Salvar dados da empresa';
+    setFormMessage('#company-message', 'Não foi possível salvar os dados. Verifique as informações e tente novamente.', true);
+    return;
+  }
+  renderAppForCompany(data);
+}
+async function createBankAccount(form) {
+  const values = new FormData(form);
+  const balance = String(values.get('opening_balance') || '').trim();
+  const balanceDate = String(values.get('opening_balance_date') || '').trim();
+  if (Boolean(balance) !== Boolean(balanceDate)) {
+    setFormMessage('#account-message', 'Informe o valor e a data do saldo inicial, ou deixe os dois vazios.', true);
+    return;
+  }
+  const button = form.querySelector('button[type="submit"]');
+  button.disabled = true;
+  button.textContent = 'Salvando...';
+  const { error } = await window.wylorSupabase.from('bank_accounts').insert({
+    company_id: appState.company.id,
+    name: String(values.get('name')).trim(),
+    bank_name: String(values.get('bank_name') || '').trim() || null,
+    account_type: values.get('account_type'),
+    opening_balance: balance || null,
+    opening_balance_date: balanceDate || null
+  });
+  if (error) {
+    button.disabled = false;
+    button.textContent = 'Salvar conta';
+    setFormMessage('#account-message', 'Não foi possível salvar a conta. Verifique as informações e tente novamente.', true);
+    return;
+  }
+  appState.accounts = null;
+  appState.dataError = null;
+  navigate();
+}
+async function submitAuth(form) {
+  const action = form.dataset.authAction;
+  const values = new FormData(form);
+  const email = String(values.get('email') || '').trim().toLowerCase();
+  const password = String(values.get('password') || '');
+  const button = form.querySelector('button[type="submit"]');
+  button.disabled = true;
+  const originalText = button.textContent;
+  button.textContent = 'Aguarde...';
+  let result;
+  if (action === 'login') {
+    result = await window.wylorSupabase.auth.signInWithPassword({ email, password });
+  } else if (action === 'signup') {
+    result = await window.wylorSupabase.auth.signUp({
+      email, password,
+      options: { data: { full_name: String(values.get('full_name') || '').trim() }, emailRedirectTo: authRedirect() }
+    });
+    if (!result.error && !result.data.session) {
+      renderAuth('login', 'A conta foi criada. Confirme seu e-mail pelo link enviado e depois entre.');
+      return;
+    }
+  } else if (action === 'forgot') {
+    result = await window.wylorSupabase.auth.resetPasswordForEmail(email, { redirectTo: authRedirect() });
+    if (!result.error) {
+      renderAuth('login', 'Se o endereço estiver cadastrado, você receberá um link para redefinir a senha.');
+      return;
+    }
+  } else if (action === 'newPassword') {
+    const confirmation = String(values.get('password_confirm') || '');
+    if (password !== confirmation) {
+      button.disabled = false;
+      button.textContent = originalText;
+      setFormMessage('#auth-message', 'As senhas não coincidem.', true);
+      return;
+    }
+    result = await window.wylorSupabase.auth.updateUser({ password });
+    if (!result.error) {
+      await window.wylorSupabase.auth.signOut();
+      appState.user = null;
+      renderAuth('login', 'Senha atualizada. Entre com sua nova senha.');
+      return;
+    }
+  }
+  if (result?.error) {
+    button.disabled = false;
+    button.textContent = originalText;
+    const message = result.error.code === 'invalid_credentials'
+      ? 'E-mail ou senha incorretos.'
+      : result.error.code === 'email_not_confirmed'
+        ? 'Confirme seu e-mail pelo link enviado antes de entrar.'
+        : 'Não foi possível concluir o acesso. Confira os dados e tente novamente.';
+    setFormMessage('#auth-message', message, true);
+  }
+}
+function handlePageClick(event) {
+  const viewButton = event.target.closest('[data-auth-view]');
+  if (viewButton) {
+    renderAuth(viewButton.dataset.authView);
+    return;
+  }
+  if (event.target.closest('[data-signout]')) {
+    window.wylorSupabase.auth.signOut();
+    return;
+  }
+  const companyButton = event.target.closest('[data-company-id]');
+  if (companyButton) {
+    const company = appState.availableCompanies?.find(item => item.id === companyButton.dataset.companyId);
+    if (company) renderAppForCompany(company);
+    return;
+  }
+  if (event.target.closest('[data-retry-workspace]')) {
+    if (appState.user) { appState.workspaceLoaded = false; loadWorkspace(appState.user); }
+    return;
+  }
+  if (event.target.closest('[data-retry-data]')) {
+    appState.accounts = null;
+    appState.dataError = null;
+    navigate();
+  }
+}
+page.addEventListener('click', handlePageClick);
+page.addEventListener('submit', event => {
+  event.preventDefault();
+  if (event.target.id === 'auth-form') submitAuth(event.target);
+  if (event.target.id === 'company-form') createCompany(event.target);
+  if (event.target.id === 'account-form') createBankAccount(event.target);
+});
+document.querySelector('#logout-button').addEventListener('click', () => window.wylorSupabase?.auth.signOut());
+async function initializeSupabase() {
+  if (!window.supabase?.createClient || !window.WYLOR_SUPABASE_CONFIG?.url || !window.WYLOR_SUPABASE_CONFIG?.anonKey) {
+    renderAuth('login', 'Não foi possível carregar a conexão segura. Atualize a página em alguns instantes.');
+    return;
+  }
+  window.wylorSupabase = window.supabase.createClient(
+    window.WYLOR_SUPABASE_CONFIG.url,
+    window.WYLOR_SUPABASE_CONFIG.anonKey,
+    { auth: window.wylorAuthOptions() }
+  );
+  window.wylorSupabase.auth.onAuthStateChange((event, session) => {
+    if (event === 'PASSWORD_RECOVERY') {
+      renderAuth('newPassword');
+      return;
+    }
+    setTimeout(() => {
+      if (session?.user) loadWorkspace(session.user);
+      else if (appState.authReady) {
+        appState.user = null;
+        appState.company = null;
+        appState.accounts = null;
+        appState.workspaceLoaded = false;
+        appState.workspaceLoadingUserId = null;
+        renderAuth('login');
+      }
+    }, 0);
+  });
+  const { data, error } = await window.wylorSupabase.auth.getSession();
+  appState.authReady = true;
+  if (error) {
+    renderAuth('login', 'Não foi possível verificar sua sessão. Entre novamente.');
+    return;
+  }
+  if (data.session?.user) await loadWorkspace(data.session.user);
+  else if (location.hash.includes('type=recovery')) renderAuth('newPassword');
+  else renderAuth('login');
+}
+initializeSupabase();
