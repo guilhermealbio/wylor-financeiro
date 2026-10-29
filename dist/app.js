@@ -44,7 +44,7 @@ const moduleDescriptions = {
 const nav = document.querySelector('#primary-nav');
 const page = document.querySelector('#page-content');
 const currentTitle = document.querySelector('#breadcrumb-current');
-const appState = { user: null, profile: null, company: null, availableCompanies: [], accounts: null, accountEditingId: null, accountSaving: false, accountNotice: '', dataError: null, authReady: false, workspaceLoaded: false, workspaceLoadingUserId: null };
+const appState = { user: null, profile: null, company: null, availableCompanies: [], accounts: null, accountEditingId: null, accountSaving: false, accountNotice: '', dataError: null, categories: null, transactions: null, movements: null, monthTotals: [], financeError: null, transactionEditingId: null, transactionSaving: false, transactionNotice: '', transactionType: 'income', transactionFilters: { category: '', account: '', status: '', from: '', to: '' }, authReady: false, workspaceLoaded: false, workspaceLoadingUserId: null };
 const svg = (name, cls = '') => `<svg class="${cls}" viewBox="0 0 24 24" aria-hidden="true">${icons[name]}</svg>`;
 nav.innerHTML = navItems.map(([id, title, icon]) => `<a class="nav-link" href="#${id}" data-page="${id}">${svg(icon, 'nav-icon')}<span>${title}</span></a>`).join('');
 
@@ -72,10 +72,18 @@ function getBalanceStatus() {
   if (knownBalances.length !== activeAccounts.length) {
     return { value: knownBalances.length ? 'Saldo incompleto' : 'Saldo inicial pendente', note: 'Informe o saldo inicial de cada conta' };
   }
-  const cents = knownBalances.reduce((total, account) => total + decimalToCents(account.opening_balance), 0n);
-  return { value: formatBRL(cents), note: 'Saldo atual baseado no saldo inicial, sem movimentações registradas' };
+  let cents = knownBalances.reduce((total, account) => total + decimalToCents(account.opening_balance), 0n);
+  if (appState.movements) cents += appState.movements.filter(movement => activeAccounts.some(account => account.id === movement.bank_account_id)).reduce((total, movement) => total + decimalToCents(movement.amount), 0n);
+  return { value: formatBRL(cents), note: appState.movements ? 'Saldo inicial mais movimentações realizadas' : 'Saldo baseado no saldo inicial; movimentações indisponíveis' };
+}
+function getAccountRealizedBalance(account) {
+  if (account.opening_balance === null) return null;
+  const effects = appState.movements?.filter(movement => movement.bank_account_id === account.id).reduce((sum, movement) => sum + decimalToCents(movement.amount), 0n) || 0n;
+  return decimalToCents(account.opening_balance) + effects;
 }
 const accountTypeNames = { checking: 'Conta corrente', savings: 'Poupança', payment: 'Conta de pagamento', investment: 'Investimento', other: 'Outra conta' };
+const transactionStatusNames = { pending: 'Pendente', paid: 'Pago', received: 'Recebido', overdue: 'Vencido', cancelled: 'Cancelado' };
+const transactionTypeNames = { income: 'Receita', expense: 'Despesa' };
 function parseMoney(value) {
   const raw = String(value || '').trim().replace(/^R\$\s*/i, '').replace(/\s/g, '');
   if (!raw) return '';
@@ -97,7 +105,7 @@ function accountForm(account = null) {
     <label>Descrição <span class="optional">Opcional</span><textarea name="description" maxlength="500" rows="3" placeholder="Observações sobre esta conta">${escapeHTML(account?.description || '')}</textarea></label>
     <div class="form-grid"><label>Saldo inicial <span class="optional">Opcional</span><input name="opening_balance" type="text" inputmode="decimal" autocomplete="off" placeholder="0,00" value="${escapeHTML(money)}" /></label><label>Data de referência<input name="opening_balance_date" type="date" value="${escapeHTML(account?.opening_balance_date || '')}" /></label></div>
     <label>Status<select name="status"><option value="active" ${!account || account.status === 'active' ? 'selected' : ''}>Ativa</option><option value="inactive" ${account?.status === 'inactive' ? 'selected' : ''}>Inativa</option></select></label>
-    <p class="form-hint">O saldo atual considera o saldo inicial. Movimentações ainda não estão disponíveis e o saldo inicial não é receita.</p><p class="form-message" id="account-message" role="status" aria-live="polite">${escapeHTML(appState.accountNotice)}</p>
+    <p class="form-hint">O saldo atual soma o saldo inicial e os recebimentos ou pagamentos registrados. O saldo inicial permanece separado das receitas.</p><p class="form-message" id="account-message" role="status" aria-live="polite">${escapeHTML(appState.accountNotice)}</p>
     <div class="form-actions"><button class="primary-button" type="submit">${editing ? 'Salvar alterações' : 'Salvar conta'}</button>${editing ? '<button class="secondary-button" type="button" data-cancel-edit>Cancelar edição</button>' : ''}</div>
   </form>`;
 }
@@ -109,7 +117,7 @@ function renderBankAccounts(title, icon) {
     : appState.accounts === null
       ? '<div class="data-loading" aria-busy="true">Carregando contas bancárias...</div>'
       : accounts.length
-        ? `<div class="account-list">${accounts.map(account => `<article class="account-row ${account.status === 'inactive' ? 'is-inactive' : ''}"><span class="module-symbol">${svg('bank')}</span><div class="account-main"><strong>${escapeHTML(account.name)} <span class="account-status">${account.status === 'active' ? 'Ativa' : 'Inativa'}</span></strong><small>${escapeHTML(account.bank_name || accountTypeNames[account.account_type] || 'Conta bancária')} · ${accountTypeNames[account.account_type] || 'Conta'}${account.description ? ` · ${escapeHTML(account.description)}` : ''}</small></div><div class="account-balance"><strong>${account.opening_balance === null ? 'Saldo inicial pendente' : formatBRL(decimalToCents(account.opening_balance))}</strong><small>Saldo atual${account.opening_balance_date ? ` desde ${formatDate(account.opening_balance_date)}` : ''}</small><small>Atualizada ${formatDateTime(account.updated_at)}</small></div><div class="account-actions"><button type="button" class="text-button" data-edit-account="${escapeHTML(account.id)}">Editar</button>${account.status === 'active' ? `<button type="button" class="text-button danger-button" data-deactivate-account="${escapeHTML(account.id)}">Desativar</button>` : `<button type="button" class="text-button" data-activate-account="${escapeHTML(account.id)}">Reativar</button>`}</div></article>`).join('')}</div>`
+        ? `<div class="account-list">${accounts.map(account => `<article class="account-row ${account.status === 'inactive' ? 'is-inactive' : ''}"><span class="module-symbol">${svg('bank')}</span><div class="account-main"><strong>${escapeHTML(account.name)} <span class="account-status">${account.status === 'active' ? 'Ativa' : 'Inativa'}</span></strong><small>${escapeHTML(account.bank_name || accountTypeNames[account.account_type] || 'Conta bancária')} · ${accountTypeNames[account.account_type] || 'Conta'}${account.description ? ` · ${escapeHTML(account.description)}` : ''}</small></div><div class="account-balance"><strong>${account.opening_balance === null ? 'Saldo inicial pendente' : formatBRL(getAccountRealizedBalance(account))}</strong><small>${appState.movements ? 'Saldo atual' : 'Saldo inicial, movimentos indisponíveis'}${account.opening_balance_date ? ` desde ${formatDate(account.opening_balance_date)}` : ''}</small><small>Atualizada ${formatDateTime(account.updated_at)}</small></div><div class="account-actions"><button type="button" class="text-button" data-edit-account="${escapeHTML(account.id)}">Editar</button>${account.status === 'active' ? `<button type="button" class="text-button danger-button" data-deactivate-account="${escapeHTML(account.id)}">Desativar</button>` : `<button type="button" class="text-button" data-activate-account="${escapeHTML(account.id)}">Reativar</button>`}</div></article>`).join('')}</div>`
         : emptyState('Nenhuma conta cadastrada', 'Cadastre a primeira conta da empresa. O saldo inicial é opcional e não será tratado como receita.', 'bank');
   return `<section aria-labelledby="page-title"><div class="page-heading"><div><p class="eyebrow">WYLOR Financeiro</p><h1 id="page-title">${title}</h1><p class="page-description">Contas, saldos iniciais e status das contas da empresa.</p></div></div>
     <div class="accounts-layout"><section class="content-card"><div class="card-heading"><h2>Contas cadastradas</h2><span>${accounts.length} ${accounts.length === 1 ? 'conta' : 'contas'}</span></div>${rows}</section>
@@ -117,29 +125,127 @@ function renderBankAccounts(title, icon) {
   </section>`;
 }
 const metric = (label, note, icon, value = 'Módulo pendente') => `<article class="metric-card"><div class="metric-top"><span class="metric-label">${label}</span><span class="metric-icon">${svg(icon)}</span></div><div class="metric-value">${value}</div><div class="metric-note">${note}</div></article>`;
+function financeTotal(kind) {
+  if (appState.financeError) return 'Indisponível';
+  if (!appState.transactions) return 'Carregando';
+  const total = appState.monthTotals.find(row => row.kind === kind)?.amount || 0;
+  return formatBRL(decimalToCents(total));
+}
+function financeResult() {
+  if (appState.financeError) return 'Indisponível';
+  if (!appState.transactions) return 'Carregando';
+  const total = appState.monthTotals.reduce((sum, row) => sum + (row.kind === 'income' ? decimalToCents(row.amount) : -decimalToCents(row.amount)), 0n);
+  return formatBRL(total);
+}
+function visibleTransactionStatus(item) {
+  const now = new Date();
+  const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+  if (item.status === 'pending' && item.due_date && item.due_date < today) return 'overdue';
+  return item.status;
+}
+function transactionRow(item) {
+  const status = visibleTransactionStatus(item);
+  return `<article class="account-row"><span class="module-symbol">${svg(item.kind === 'income' ? 'income' : 'expense')}</span><div class="account-main"><strong>${escapeHTML(item.description)} <span class="account-status">${transactionStatusNames[status]}</span></strong><small>${escapeHTML(item.financial_categories?.name || 'Categoria')} · ${formatDate(item.competence_date)}${item.due_date ? ` · vence ${formatDate(item.due_date)}` : ''}</small></div><div class="account-balance"><strong class="${item.kind === 'income' ? 'income-value' : 'expense-value'}">${item.kind === 'expense' ? '−' : '+'}${formatBRL(decimalToCents(item.amount))}</strong><small>${escapeHTML(item.bank_accounts?.name || 'Sem conta vinculada')}</small></div><div class="account-actions"><button class="text-button" type="button" data-edit-transaction="${escapeHTML(item.id)}">Ver / editar</button></div></article>`;
+}
+function transactionForm(id, title) {
+  const kind = id === 'revenues' ? 'income' : id === 'expenses' ? 'expense' : appState.transactionType;
+  const editing = appState.transactions?.find(item => item.id === appState.transactionEditingId) || null;
+  const locked = editing && ['paid','received','cancelled'].includes(editing.status);
+  const cancelled = editing?.status === 'cancelled';
+  const categories = (appState.categories || []).filter(category => category.kind === kind && category.active);
+  const options = categories.map(category => `<option value="${escapeHTML(category.id)}" ${editing?.category_id === category.id ? 'selected' : ''}>${escapeHTML(category.name)}</option>`).join('');
+  const accounts = (appState.accounts || []).filter(account => account.status === 'active');
+  const accountOptions = accounts.map(account => `<option value="${escapeHTML(account.id)}" ${editing?.bank_account_id === account.id ? 'selected' : ''}>${escapeHTML(account.name)}${account.bank_name ? ` · ${escapeHTML(account.bank_name)}` : ''}</option>`).join('');
+  const settledStatus = kind === 'income' ? 'received' : 'paid';
+  const dateToday = new Date();
+  const today = `${dateToday.getFullYear()}-${String(dateToday.getMonth() + 1).padStart(2, '0')}-${String(dateToday.getDate()).padStart(2, '0')}`;
+  return `<form id="transaction-form" class="data-form" data-editing-id="${escapeHTML(editing?.id || '')}">
+    <label>Descrição<input name="description" maxlength="240" value="${escapeHTML(editing?.description || '')}" required ${cancelled ? 'disabled' : ''}/></label>
+    <div class="form-grid"><label>Categoria<select name="category_id" required ${locked ? 'disabled' : ''}><option value="">Selecione</option>${options}</select></label><label>Valor em reais<input name="amount" inputmode="decimal" placeholder="0,00" value="${escapeHTML(editing?.amount == null ? '' : String(editing.amount).replace('.', ','))}" required ${locked ? 'disabled' : ''}/></label></div>
+    <div class="form-grid"><label>Competência<input type="date" name="competence_date" value="${escapeHTML(editing?.competence_date || today)}" required ${locked ? 'disabled' : ''}/></label><label>Vencimento <span class="optional">Opcional</span><input type="date" name="due_date" value="${escapeHTML(editing?.due_date || '')}" ${locked ? 'disabled' : ''}/></label></div>
+    <div class="form-grid"><label>Conta bancária<select name="bank_account_id" ${locked ? 'disabled' : ''}><option value="">Sem conta vinculada</option>${accountOptions}</select></label><label>Data de ${kind === 'income' ? 'recebimento' : 'pagamento'}<input type="date" name="settled_at" value="${escapeHTML(editing?.settled_at || (editing?.status === settledStatus ? today : ''))}" ${locked ? 'disabled' : ''}/></label></div>
+    <label>Status<select name="status" ${editing?.status === 'cancelled' ? 'disabled' : ''}>${editing ? `<option value="${escapeHTML(editing.status)}">${transactionStatusNames[visibleTransactionStatus(editing)]}</option>${['paid','received'].includes(editing.status) ? '<option value="cancelled">Cancelar e estornar</option>' : `<option value="${settledStatus}">${transactionStatusNames[settledStatus]}</option><option value="cancelled">Cancelar</option>`}` : `<option value="pending">Pendente</option><option value="${settledStatus}">${transactionStatusNames[settledStatus]}</option>`}</select></label>
+    <label>Observações<textarea name="notes" maxlength="2000" rows="3" ${cancelled ? 'disabled' : ''}>${escapeHTML(editing?.notes || '')}</textarea></label>
+    ${!editing ? `<input type="hidden" name="request_key" value="${crypto.randomUUID()}"/>` : ''}
+    <p class="form-hint">Pendentes não mudam o saldo. Ao liquidar, a movimentação é registrada junto com o lançamento. O cancelamento de item liquidado cria estorno rastreável.</p><p class="form-message" id="transaction-message" role="status" aria-live="polite">${escapeHTML(appState.transactionNotice)}</p>
+    <div class="form-actions">${cancelled ? '' : `<button class="primary-button" type="submit" ${appState.transactionSaving ? 'disabled' : ''}>${editing ? 'Salvar alterações' : `Salvar ${kind === 'income' ? 'receita' : 'despesa'}`}</button>`}${editing ? '<button class="secondary-button" type="button" data-cancel-transaction-edit>Voltar</button>' : ''}</div>
+  </form>`;
+}
+function renderTransactions(id, title) {
+  const kind = id === 'revenues' ? 'income' : id === 'expenses' ? 'expense' : null;
+  const editing = appState.transactionEditingId;
+  const all = appState.transactions || [];
+  const filtered = all.filter(item => (!kind || item.kind === kind) && (!appState.transactionFilters.category || item.category_id === appState.transactionFilters.category) && (!appState.transactionFilters.account || item.bank_account_id === appState.transactionFilters.account) && (!appState.transactionFilters.status || visibleTransactionStatus(item) === appState.transactionFilters.status) && (!appState.transactionFilters.from || item.competence_date >= appState.transactionFilters.from) && (!appState.transactionFilters.to || item.competence_date <= appState.transactionFilters.to));
+  const list = appState.financeError ? `${emptyState('Não foi possível carregar os lançamentos', 'Confira a conexão e tente novamente.', 'alert')}<button class="text-button" type="button" data-retry-finance>Tentar novamente</button>` : appState.transactions === null ? '<div class="data-loading" aria-busy="true">Carregando dados financeiros...</div>' : filtered.length ? `<div class="account-list">${filtered.map(transactionRow).join('')}</div>` : emptyState('Sem lançamentos para estes filtros', 'Cadastre um lançamento ou ajuste os filtros.', 'flow');
+  const categoryList = (appState.categories || []).filter(category => !kind || category.kind === kind);
+  const form = ['revenues','expenses'].includes(id) ? `<section class="content-card"><div class="card-heading"><h2>${editing ? 'Detalhes do lançamento' : `Novo ${kind === 'income' ? 'recebimento ou previsão' : 'pagamento ou compromisso'}`}</h2></div>${transactionForm(id, title)}</section>` : `<section class="content-card"><div class="card-heading"><h2>Registrar movimentação</h2><span>BRL</span></div><div class="form-actions"><a class="secondary-button" href="#revenues">Nova receita</a><a class="secondary-button" href="#expenses">Nova despesa</a></div></section>`;
+  return `<section aria-labelledby="page-title"><div class="page-heading"><div><p class="eyebrow">WYLOR Financeiro</p><h1 id="page-title">${title}</h1><p class="page-description">Lançamentos da empresa, saldos bancários só mudam quando há pagamento ou recebimento.</p></div></div>
+    <div class="transaction-layout"><section class="content-card"><div class="card-heading"><h2>${id === 'cash_flow' ? 'Fluxo de caixa e compromissos' : `Lista de ${title.toLocaleLowerCase('pt-BR')}`}</h2><span>${filtered.length} ${filtered.length === 1 ? 'item' : 'itens'}</span></div>
+      <div class="filter-grid"><label>Competência desde<input type="date" data-finance-filter="from" value="${escapeHTML(appState.transactionFilters.from)}"/></label><label>Até<input type="date" data-finance-filter="to" value="${escapeHTML(appState.transactionFilters.to)}"/></label><label>Categoria<select data-finance-filter="category"><option value="">Todas</option>${categoryList.map(c => `<option value="${escapeHTML(c.id)}" ${appState.transactionFilters.category === c.id ? 'selected' : ''}>${escapeHTML(c.name)}</option>`).join('')}</select></label><label>Conta<select data-finance-filter="account"><option value="">Todas</option>${(appState.accounts || []).map(a => `<option value="${escapeHTML(a.id)}" ${appState.transactionFilters.account === a.id ? 'selected' : ''}>${escapeHTML(a.name)}</option>`).join('')}</select></label><label>Status<select data-finance-filter="status"><option value="">Todos</option>${Object.entries(transactionStatusNames).map(([key, value]) => `<option value="${key}" ${appState.transactionFilters.status === key ? 'selected' : ''}>${value}</option>`).join('')}</select></label>${id === 'cash_flow' ? '<label>Tipo<select data-finance-type><option value="">Receitas e despesas</option><option value="income" '+(appState.transactionType === 'income'?'selected':'')+'>Receitas</option><option value="expense" '+(appState.transactionType === 'expense'?'selected':'')+'>Despesas</option></select></label>' : ''}</div>${list}</section>
+      <div class="finance-side">${form}<section class="content-card"><div class="card-heading"><h2>Categorias financeiras</h2></div><form id="category-form" class="data-form"><label>Nova categoria<input name="name" maxlength="120" required placeholder="Ex.: Vendas Shopee"/></label><label>Tipo<select name="kind"><option value="${kind || appState.transactionType}">${transactionTypeNames[kind || appState.transactionType]}</option>${!kind ? '<option value="expense">Despesa</option><option value="income">Receita</option>' : ''}</select></label><button class="secondary-button" type="submit">Adicionar categoria</button><p id="category-message" class="form-message" role="status" aria-live="polite"></p></form><ul class="category-list">${categoryList.map(c => `<li><span>${escapeHTML(c.name)} <small>${c.active ? 'Ativa' : 'Inativa'}</small></span><button class="text-button" type="button" data-toggle-category="${escapeHTML(c.id)}">${c.active ? 'Desativar' : 'Reativar'}</button></li>`).join('') || '<li>Sem categorias cadastradas</li>'}</ul></section></div>
+    </div><section class="content-card history-card"><div class="card-heading"><h2>Histórico de alterações</h2><span>Até 20 eventos recentes</span></div>${appState.financeError ? emptyState('Histórico indisponível', 'A auditoria ficará disponível após aplicar a estrutura do módulo.', 'alert') : appState.audit?.length ? `<div class="account-list">${appState.audit.slice(0,20).map(row => `<div class="account-row"><div class="account-main"><strong>${transactionStatusNames[row.action] || ({created:'Criado',updated:'Atualizado',settled:'Liquidado',cancelled:'Cancelado'}[row.action])}</strong><small>${escapeHTML(all.find(t => t.id === row.transaction_id)?.description || 'Lançamento')} · ${formatDateTime(row.created_at)}</small></div></div>`).join('')}</div>` : emptyState('Sem alterações registradas', 'As próximas operações serão registradas automaticamente.')}</section></section>`;
+}
+async function loadFinanceData(force = false) {
+  if (!appState.user || !appState.company || (appState.transactions !== null && !force)) return;
+  const companyId = appState.company.id;
+  appState.financeError = null;
+  const [transactionResult, categoryResult, movementResult, totalsResult, auditResult] = await Promise.all([
+    fetchAllRows(window.wylorSupabase.from('financial_transactions').select('id, company_id, bank_account_id, category_id, kind, description, amount, competence_date, due_date, settled_at, status, notes, updated_at, financial_categories(name), bank_accounts(name)').eq('company_id', companyId).order('competence_date', { ascending: false })),
+    window.wylorSupabase.from('financial_categories').select('id, name, kind, active').eq('company_id', companyId).order('name'),
+    window.wylorSupabase.from('account_movement_totals').select('bank_account_id, amount').eq('company_id', companyId),
+    window.wylorSupabase.from('financial_current_month_totals').select('kind, amount').eq('company_id', companyId),
+    window.wylorSupabase.from('financial_transaction_audit').select('id, transaction_id, action, created_at').eq('company_id', companyId).order('created_at', { ascending: false }).limit(20)
+  ]);
+  if (companyId !== appState.company?.id) return;
+  if (transactionResult.error || categoryResult.error || movementResult.error || totalsResult.error || auditResult.error) {
+    appState.financeError = 'Não foi possível consultar os dados financeiros. A estrutura do módulo precisa estar aplicada e acessível.';
+    appState.transactions = [];
+    appState.categories = categoryResult.data || [];
+    appState.movements = null;
+    appState.monthTotals = [];
+    appState.audit = [];
+  } else {
+    appState.transactions = transactionResult.data || [];
+    appState.categories = categoryResult.data || [];
+    appState.movements = movementResult.data || [];
+    appState.monthTotals = totalsResult.data || [];
+    appState.audit = auditResult.data || [];
+  }
+  navigate();
+}
+async function fetchAllRows(query) {
+  const rows = [];
+  for (let from = 0; ; from += 1000) {
+    const { data, error } = await query.range(from, from + 999);
+    if (error) return { data: null, error };
+    rows.push(...(data || []));
+    if (!data || data.length < 1000) return { data: rows, error: null };
+  }
+}
 function renderDashboard() {
   const balance = getBalanceStatus();
   const companyName = escapeHTML(appState.company?.fantasy_name || 'empresa');
   return `<section aria-labelledby="page-title">
     <div class="page-heading"><div><p class="eyebrow">Visão geral</p><h1 id="page-title">Dashboard</h1><p class="page-description">Acompanhe a saúde financeira de ${companyName} em um só lugar.</p></div><div class="period-label">${svg('calendar')}<span>Período atual</span></div></div>
-    <div class="setup-banner"><span class="banner-icon">${svg('alert')}</span><div><strong>Indicadores ligados aos dados da empresa</strong><p>O saldo atual considera os saldos iniciais das contas ativas. Como movimentações ainda não estão disponíveis, ele não inclui entradas ou saídas. Saldo inicial não é receita.</p>${appState.dataError ? '<button class="text-button" type="button" data-retry-data>Tentar carregar novamente</button>' : ''}</div></div>
-    <div class="metrics-grid" aria-label="Indicadores financeiros sem dados disponíveis">
+    <div class="setup-banner"><span class="banner-icon">${svg('alert')}</span><div><strong>Indicadores ligados aos dados da empresa</strong><p>O saldo considera o saldo inicial das contas ativas e as movimentações liquidadas. O saldo inicial permanece separado de receitas e despesas.</p>${appState.dataError || appState.financeError ? '<button class="text-button" type="button" data-retry-data>Tentar carregar novamente</button>' : ''}</div></div>
+    <div class="metrics-grid" aria-label="Indicadores financeiros">
       ${metric('Saldo total das contas', balance.note, 'bank', balance.value)}
-      ${metric('Receitas do mês', 'Aguardando o módulo de receitas', 'income')}
-      ${metric('Despesas do mês', 'Aguardando o módulo de despesas', 'expense')}
-      ${metric('Resultado do período', 'Disponível após receitas e despesas', 'flow')}
+      ${metric('Receitas do mês', 'Recebidas no mês atual', 'income', financeTotal('income'))}
+      ${metric('Despesas do mês', 'Pagas no mês atual', 'expense', financeTotal('expense'))}
+      ${metric('Resultado do período', 'Recebimentos menos pagamentos', 'flow', financeResult())}
       ${metric('Contas a pagar', 'Aguardando o módulo de contas a pagar', 'payable')}
       ${metric('Contas a receber', 'Aguardando o módulo de contas a receber', 'receivable')}
     </div>
     <div class="dashboard-grid">
-      <section class="content-card" aria-labelledby="activity-heading"><div class="card-heading"><h2 id="activity-heading">Movimentação financeira</h2><span>Período atual</span></div>${emptyState('Nenhuma movimentação disponível','Quando os lançamentos estiverem configurados, a atividade financeira aparecerá aqui.')}</section>
-      <section class="content-card" aria-labelledby="accounts-heading"><div class="card-heading"><h2 id="accounts-heading">Contas bancárias</h2><a class="text-button" href="#bank_accounts">Ver módulo</a></div>${appState.accounts?.some(account => account.status === 'active') ? `<div class="account-list dashboard-account-list">${appState.accounts.filter(account => account.status === 'active').slice(0, 4).map(account => `<div class="account-row"><div class="account-main"><strong>${escapeHTML(account.name)}</strong><small>${escapeHTML(account.bank_name || accountTypeNames[account.account_type] || 'Conta bancária')}</small></div><div class="account-balance"><strong>${account.opening_balance === null ? 'Saldo pendente' : formatBRL(decimalToCents(account.opening_balance))}</strong><small>Saldo atual</small></div></div>`).join('')}</div>` : emptyState(appState.accounts === null ? 'Carregando contas' : 'Nenhuma conta ativa', appState.accounts === null ? 'Consultando as contas da empresa.' : 'Cadastre ou reative uma conta bancária.', 'bank')}</section>
+      <section class="content-card" aria-labelledby="activity-heading"><div class="card-heading"><h2 id="activity-heading">Movimentação financeira</h2><a class="text-button" href="#cash_flow">Ver fluxo de caixa</a></div>${appState.transactions?.length ? `<div class="account-list">${appState.transactions.filter(item => ['paid','received'].includes(item.status)).slice(0,5).map(transactionRow).join('')}</div>` : emptyState(appState.transactions === null ? 'Carregando movimentações' : 'Sem movimentações realizadas','Receitas e despesas pendentes não alteram o saldo bancário.')}</section>
+      <section class="content-card" aria-labelledby="accounts-heading"><div class="card-heading"><h2 id="accounts-heading">Contas bancárias</h2><a class="text-button" href="#bank_accounts">Ver módulo</a></div>${appState.accounts?.some(account => account.status === 'active') ? `<div class="account-list dashboard-account-list">${appState.accounts.filter(account => account.status === 'active').slice(0, 4).map(account => `<div class="account-row"><div class="account-main"><strong>${escapeHTML(account.name)}</strong><small>${escapeHTML(account.bank_name || accountTypeNames[account.account_type] || 'Conta bancária')}</small></div><div class="account-balance"><strong>${getAccountRealizedBalance(account) === null ? 'Saldo pendente' : formatBRL(getAccountRealizedBalance(account))}</strong><small>Saldo atual</small></div></div>`).join('')}</div>` : emptyState(appState.accounts === null ? 'Carregando contas' : 'Nenhuma conta ativa', appState.accounts === null ? 'Consultando as contas da empresa.' : 'Cadastre ou reative uma conta bancária.', 'bank')}</section>
     </div>
   </section>`;
 }
 function renderModule(id) {
   const [, title, icon] = navItems.find(([key]) => key === id) || navItems[0];
   if (id === 'bank_accounts') return renderBankAccounts(title, icon);
+  if (['revenues', 'expenses', 'cash_flow'].includes(id)) return renderTransactions(id, title);
   return `<section aria-labelledby="page-title"><div class="page-heading"><div><p class="eyebrow">WYLOR Financeiro</p><h1 id="page-title">${title}</h1><p class="page-description">Área de ${title.toLocaleLowerCase('pt-BR')} da operação financeira da WYLOR.</p></div></div>
     <div class="module-intro"><span class="module-symbol">${svg(icon)}</span><div><h2>Módulo em desenvolvimento</h2><p>${moduleDescriptions[id]}</p><span class="module-status">Disponível após configurar o acesso aos dados</span></div></div>
     <div class="foundation-note">${svg('lock')}<span>Esta tela é apenas a estrutura de navegação. Nenhuma operação ou dado financeiro está sendo simulado.</span></div>
@@ -158,7 +264,8 @@ function navigate() {
     else link.removeAttribute('aria-current');
   });
   closeMenu();
-  if (id === 'dashboard' || id === 'bank_accounts') loadBankAccounts();
+  if (['dashboard', 'bank_accounts', 'cash_flow', 'revenues', 'expenses'].includes(id)) loadBankAccounts();
+  if (['dashboard', 'bank_accounts', 'cash_flow', 'revenues', 'expenses'].includes(id)) loadFinanceData();
 }
 function closeMenu() {
   document.body.classList.remove('menu-open');
@@ -214,6 +321,12 @@ function renderCompanyPicker(companies) {
 function renderAppForCompany(company) {
   appState.company = company;
   appState.accounts = null;
+  appState.categories = null;
+  appState.transactions = null;
+  appState.movements = null;
+  appState.monthTotals = [];
+  appState.audit = null;
+  appState.financeError = null;
   appState.dataError = null;
   document.body.classList.remove('auth-mode');
   const profileName = appState.profile?.full_name || appState.user?.user_metadata?.full_name || 'Conta WYLOR';
@@ -412,6 +525,63 @@ async function submitAuth(form) {
     setFormMessage('#auth-message', message, true);
   }
 }
+async function saveFinancialTransaction(form) {
+  if (appState.transactionSaving) return;
+  const editing = appState.transactions?.find(item => item.id === form.dataset.editingId) || null;
+  const values = new FormData(form);
+  const kind = editing?.kind || (location.hash === '#expenses' ? 'expense' : location.hash === '#revenues' ? 'income' : appState.transactionType);
+  const settledStatus = kind === 'income' ? 'received' : 'paid';
+  const status = editing?.status === 'cancelled' ? 'cancelled' : String(values.get('status') || 'pending');
+  if (status === 'cancelled' && !window.confirm(editing?.status === settledStatus ? 'Cancelar este lançamento e registrar o estorno na conta bancária?' : 'Cancelar este lançamento?')) return;
+  const amountText = editing && ['paid','received','cancelled'].includes(editing.status) ? String(editing.amount) : parseMoney(values.get('amount'));
+  if (amountText === null || !amountText || Number(amountText) <= 0) { setFormMessage('#transaction-message', 'Informe um valor maior que zero, com até duas casas decimais.', true); return; }
+  const competenceDate = editing && ['paid','received','cancelled'].includes(editing.status) ? editing.competence_date : String(values.get('competence_date') || '');
+  const accountId = editing && ['paid','received','cancelled'].includes(editing.status) ? editing.bank_account_id : String(values.get('bank_account_id') || '') || null;
+  const settledAt = editing && ['paid','received','cancelled'].includes(editing.status) ? editing.settled_at : String(values.get('settled_at') || '') || null;
+  if (!editing && status === settledStatus && (!accountId || !settledAt)) { setFormMessage('#transaction-message', 'Para liquidar agora, informe a conta e a data de pagamento ou recebimento.', true); return; }
+  if (!editing && status !== settledStatus && status !== 'pending') { setFormMessage('#transaction-message', 'Estado inválido para um novo lançamento.', true); return; }
+  if (editing && ['paid','received'].includes(editing.status) && status === settledStatus && !editing.bank_account_id) { setFormMessage('#transaction-message', 'O lançamento liquidado não tem conta vinculada.', true); return; }
+  const payload = editing && ['paid','received','cancelled'].includes(editing.status) ? (status === 'cancelled' ? { status } : { status, description: String(values.get('description') || editing.description).trim(), notes: String(values.get('notes') || '').trim() || null }) : {
+    company_id: appState.company.id,
+    bank_account_id: accountId,
+    category_id: String(values.get('category_id') || ''), kind,
+    description: String(values.get('description') || '').trim(), amount: amountText,
+    competence_date: competenceDate, due_date: String(values.get('due_date') || '') || null,
+    settled_at: status === settledStatus ? settledAt : null,
+    status, notes: String(values.get('notes') || '').trim() || null
+  };
+  if (editing && !['paid','received','cancelled'].includes(editing.status) && status === settledStatus && (!payload.bank_account_id || !payload.settled_at)) { setFormMessage('#transaction-message', 'Para liquidar, informe a conta e a data de pagamento ou recebimento.', true); return; }
+  if (!editing) payload.request_key = String(values.get('request_key'));
+  if (!editing && !payload.category_id) { setFormMessage('#transaction-message', 'Selecione uma categoria financeira.', true); return; }
+  if (!editing && !payload.description) { setFormMessage('#transaction-message', 'Informe a descrição do lançamento.', true); return; }
+  appState.transactionSaving = true;
+  const button = form.querySelector('[type="submit"]'); if (button) button.disabled = true;
+  const query = editing
+    ? window.wylorSupabase.from('financial_transactions').update(payload).eq('id', editing.id).eq('company_id', appState.company.id).select('id').single()
+    : window.wylorSupabase.from('financial_transactions').insert(payload).select('id').single();
+  let { error } = await query;
+  if (error?.code === '23505' && !editing) {
+    const duplicate = await window.wylorSupabase.from('financial_transactions').select('id').eq('company_id', appState.company.id).eq('request_key', payload.request_key).maybeSingle();
+    if (duplicate.data?.id) error = null;
+  }
+  appState.transactionSaving = false;
+  if (error) { if (button) button.disabled = false; setFormMessage('#transaction-message', 'Não foi possível salvar. Confira a categoria, a conta ativa e os dados obrigatórios.', true); return; }
+  appState.transactionEditingId = null;
+  appState.transactionNotice = editing ? 'Alterações salvas com sucesso.' : 'Lançamento salvo com sucesso.';
+  appState.transactions = null; appState.movements = null;
+  await loadFinanceData(true);
+}
+async function saveFinancialCategory(form) {
+  const values = new FormData(form);
+  const name = String(values.get('name') || '').trim();
+  const kind = String(values.get('kind') || '');
+  if (!name || !['income','expense'].includes(kind)) { setFormMessage('#category-message', 'Informe nome e tipo da categoria.', true); return; }
+  const { error } = await window.wylorSupabase.from('financial_categories').insert({ company_id: appState.company.id, name, kind });
+  if (error) { setFormMessage('#category-message', 'Não foi possível adicionar. O nome pode já estar cadastrado para este tipo.', true); return; }
+  appState.financeError = null; appState.transactions = null;
+  await loadFinanceData(true);
+  setFormMessage('#category-message', 'Categoria adicionada.');
+}
 function handlePageClick(event) {
   const passwordToggle = event.target.closest('[data-toggle-password]');
   if (passwordToggle) {
@@ -465,6 +635,25 @@ function handlePageClick(event) {
   if (deactivateButton) { setAccountStatus(deactivateButton.dataset.deactivateAccount, 'inactive'); return; }
   const activateButton = event.target.closest('[data-activate-account]');
   if (activateButton) { setAccountStatus(activateButton.dataset.activateAccount, 'active'); return; }
+  const transactionButton = event.target.closest('[data-edit-transaction]');
+  if (transactionButton) {
+    appState.transactionEditingId = transactionButton.dataset.editTransaction;
+    const row = appState.transactions?.find(item => item.id === appState.transactionEditingId);
+    if (row) { appState.transactionType = row.kind; location.hash = row.kind === 'income' ? '#revenues' : '#expenses'; }
+    return;
+  }
+  if (event.target.closest('[data-cancel-transaction-edit]')) { appState.transactionEditingId = null; navigate(); return; }
+  if (event.target.closest('[data-retry-finance]')) { appState.transactions = null; appState.financeError = null; loadFinanceData(true); return; }
+  const categoryToggle = event.target.closest('[data-toggle-category]');
+  if (categoryToggle) {
+    const category = appState.categories?.find(item => item.id === categoryToggle.dataset.toggleCategory);
+    if (!category) return;
+    window.wylorSupabase.from('financial_categories').update({ active: !category.active }).eq('id', category.id).eq('company_id', appState.company.id).then(({ error }) => {
+      if (error) { setFormMessage('#category-message', 'Não foi possível atualizar a categoria.', true); return; }
+      appState.transactions = null; loadFinanceData(true);
+    });
+    return;
+  }
 }
 page.addEventListener('click', handlePageClick);
 page.addEventListener('submit', event => {
@@ -472,6 +661,12 @@ page.addEventListener('submit', event => {
   if (event.target.id === 'auth-form') submitAuth(event.target);
   if (event.target.id === 'company-form') createCompany(event.target);
   if (event.target.id === 'account-form') createBankAccount(event.target);
+  if (event.target.id === 'transaction-form') saveFinancialTransaction(event.target);
+  if (event.target.id === 'category-form') saveFinancialCategory(event.target);
+});
+page.addEventListener('change', event => {
+  if (event.target.matches('[data-finance-filter]')) { appState.transactionFilters[event.target.dataset.financeFilter] = event.target.value; navigate(); }
+  if (event.target.matches('[data-finance-type]')) { appState.transactionType = event.target.value; navigate(); }
 });
 document.querySelector('#logout-button').addEventListener('click', () => window.wylorSupabase?.auth.signOut());
 async function initializeSupabase() {
@@ -495,6 +690,11 @@ async function initializeSupabase() {
         appState.user = null;
         appState.company = null;
         appState.accounts = null;
+        appState.categories = null;
+        appState.transactions = null;
+        appState.movements = null;
+        appState.monthTotals = [];
+        appState.audit = null;
         appState.workspaceLoaded = false;
         appState.workspaceLoadingUserId = null;
         renderAuth('login');
