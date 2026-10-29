@@ -1,0 +1,12 @@
+{
+  "criadoEm": null,
+  "resumo": "",
+  "marcos": [],
+  "decisoes": [],
+  "motorAtual": null,
+  "backend": "supabase",
+  "supabase": {
+    "ref": "jhtptvrfhuprltmkfyfw",
+    "pronto": true
+  }
+}
