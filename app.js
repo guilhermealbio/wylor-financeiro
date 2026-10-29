@@ -44,7 +44,7 @@ const moduleDescriptions = {
 const nav = document.querySelector('#primary-nav');
 const page = document.querySelector('#page-content');
 const currentTitle = document.querySelector('#breadcrumb-current');
-const appState = { user: null, profile: null, company: null, availableCompanies: [], accounts: null, dataError: null, authReady: false, workspaceLoaded: false, workspaceLoadingUserId: null };
+const appState = { user: null, profile: null, company: null, availableCompanies: [], accounts: null, accountEditingId: null, accountSaving: false, accountNotice: '', dataError: null, authReady: false, workspaceLoaded: false, workspaceLoadingUserId: null };
 const svg = (name, cls = '') => `<svg class="${cls}" viewBox="0 0 24 24" aria-hidden="true">${icons[name]}</svg>`;
 nav.innerHTML = navItems.map(([id, title, icon]) => `<a class="nav-link" href="#${id}" data-page="${id}">${svg(icon, 'nav-icon')}<span>${title}</span></a>`).join('');
 
@@ -66,27 +66,54 @@ function formatBRL(cents) {
 function getBalanceStatus() {
   if (appState.dataError) return { value: 'Não foi possível consultar', note: 'Tente carregar os dados novamente' };
   if (appState.accounts === null) return { value: 'Carregando', note: 'Consultando as contas da empresa' };
-  if (appState.accounts.length === 0) return { value: 'Sem contas cadastradas', note: 'Cadastre uma conta bancária' };
-  const knownBalances = appState.accounts.filter(account => account.opening_balance !== null);
-  if (knownBalances.length !== appState.accounts.length) {
+  const activeAccounts = appState.accounts.filter(account => account.status === 'active');
+  if (activeAccounts.length === 0) return { value: 'Sem contas cadastradas', note: 'Cadastre uma conta bancária' };
+  const knownBalances = activeAccounts.filter(account => account.opening_balance !== null);
+  if (knownBalances.length !== activeAccounts.length) {
     return { value: knownBalances.length ? 'Saldo incompleto' : 'Saldo inicial pendente', note: 'Informe o saldo inicial de cada conta' };
   }
   const cents = knownBalances.reduce((total, account) => total + decimalToCents(account.opening_balance), 0n);
-  return { value: formatBRL(cents), note: `Saldo inicial informado em ${knownBalances.length} ${knownBalances.length === 1 ? 'conta' : 'contas'}` };
+  return { value: formatBRL(cents), note: 'Saldo atual baseado no saldo inicial, sem movimentações registradas' };
 }
 const accountTypeNames = { checking: 'Conta corrente', savings: 'Poupança', payment: 'Conta de pagamento', investment: 'Investimento', other: 'Outra conta' };
+function parseMoney(value) {
+  const raw = String(value || '').trim().replace(/^R\$\s*/i, '').replace(/\s/g, '');
+  if (!raw) return '';
+  const normalized = raw.includes(',') ? raw.replace(/\./g, '').replace(',', '.') : raw;
+  return /^-?\d{1,12}(?:\.\d{1,2})?$/.test(normalized) ? normalized : null;
+}
+function formatDateTime(value) {
+  if (!value) return 'Sem atualização';
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? 'Sem atualização' : new Intl.DateTimeFormat('pt-BR', { dateStyle: 'short', timeStyle: 'short' }).format(date);
+}
+function accountForm(account = null) {
+  const editing = Boolean(account);
+  const money = account?.opening_balance === null || account?.opening_balance === undefined ? '' : String(account.opening_balance).replace('.', ',');
+  return `<form id="account-form" class="data-form" data-editing-id="${escapeHTML(account?.id || '')}">
+    <label>Nome da conta<input name="name" maxlength="120" autocomplete="off" placeholder="Ex.: Conta principal" value="${escapeHTML(account?.name || '')}" required /></label>
+    <label>Banco ou instituição <span class="optional">Opcional</span><input name="bank_name" maxlength="120" autocomplete="organization" placeholder="Nome da instituição" value="${escapeHTML(account?.bank_name || '')}" /></label>
+    <label>Tipo de conta<select name="account_type" required>${Object.entries(accountTypeNames).map(([key, label]) => `<option value="${key}" ${account?.account_type === key ? 'selected' : ''}>${label}</option>`).join('')}</select></label>
+    <label>Descrição <span class="optional">Opcional</span><textarea name="description" maxlength="500" rows="3" placeholder="Observações sobre esta conta">${escapeHTML(account?.description || '')}</textarea></label>
+    <div class="form-grid"><label>Saldo inicial <span class="optional">Opcional</span><input name="opening_balance" type="text" inputmode="decimal" autocomplete="off" placeholder="0,00" value="${escapeHTML(money)}" /></label><label>Data de referência<input name="opening_balance_date" type="date" value="${escapeHTML(account?.opening_balance_date || '')}" /></label></div>
+    <label>Status<select name="status"><option value="active" ${!account || account.status === 'active' ? 'selected' : ''}>Ativa</option><option value="inactive" ${account?.status === 'inactive' ? 'selected' : ''}>Inativa</option></select></label>
+    <p class="form-hint">O saldo atual considera o saldo inicial. Movimentações ainda não estão disponíveis e o saldo inicial não é receita.</p><p class="form-message" id="account-message" role="status" aria-live="polite">${escapeHTML(appState.accountNotice)}</p>
+    <div class="form-actions"><button class="primary-button" type="submit">${editing ? 'Salvar alterações' : 'Salvar conta'}</button>${editing ? '<button class="secondary-button" type="button" data-cancel-edit>Cancelar edição</button>' : ''}</div>
+  </form>`;
+}
 function renderBankAccounts(title, icon) {
   const accounts = appState.accounts || [];
+  const editing = accounts.find(account => account.id === appState.accountEditingId) || null;
   const rows = appState.dataError
     ? `${emptyState('Não foi possível carregar as contas', 'Verifique sua conexão e tente novamente.', 'alert')}<div class="retry-row"><button class="text-button" type="button" data-retry-data>Tentar carregar novamente</button></div>`
     : appState.accounts === null
       ? '<div class="data-loading" aria-busy="true">Carregando contas bancárias...</div>'
       : accounts.length
-        ? `<div class="account-list">${accounts.map(account => `<article class="account-row"><span class="module-symbol">${svg('bank')}</span><div class="account-main"><strong>${escapeHTML(account.name)}</strong><small>${escapeHTML(account.bank_name || accountTypeNames[account.account_type] || 'Conta bancária')} · ${accountTypeNames[account.account_type] || 'Conta'}</small></div><div class="account-balance"><strong>${account.opening_balance === null ? 'Saldo inicial pendente' : formatBRL(decimalToCents(account.opening_balance))}</strong><small>${account.opening_balance_date ? `Posição em ${formatDate(account.opening_balance_date)}` : 'Saldo não informado'}</small></div></article>`).join('')}</div>`
+        ? `<div class="account-list">${accounts.map(account => `<article class="account-row ${account.status === 'inactive' ? 'is-inactive' : ''}"><span class="module-symbol">${svg('bank')}</span><div class="account-main"><strong>${escapeHTML(account.name)} <span class="account-status">${account.status === 'active' ? 'Ativa' : 'Inativa'}</span></strong><small>${escapeHTML(account.bank_name || accountTypeNames[account.account_type] || 'Conta bancária')} · ${accountTypeNames[account.account_type] || 'Conta'}${account.description ? ` · ${escapeHTML(account.description)}` : ''}</small></div><div class="account-balance"><strong>${account.opening_balance === null ? 'Saldo inicial pendente' : formatBRL(decimalToCents(account.opening_balance))}</strong><small>Saldo atual${account.opening_balance_date ? ` desde ${formatDate(account.opening_balance_date)}` : ''}</small><small>Atualizada ${formatDateTime(account.updated_at)}</small></div><div class="account-actions"><button type="button" class="text-button" data-edit-account="${escapeHTML(account.id)}">Editar</button>${account.status === 'active' ? `<button type="button" class="text-button danger-button" data-deactivate-account="${escapeHTML(account.id)}">Desativar</button>` : `<button type="button" class="text-button" data-activate-account="${escapeHTML(account.id)}">Reativar</button>`}</div></article>`).join('')}</div>`
         : emptyState('Nenhuma conta cadastrada', 'Cadastre a primeira conta da empresa. O saldo inicial é opcional e não será tratado como receita.', 'bank');
-  return `<section aria-labelledby="page-title"><div class="page-heading"><div><p class="eyebrow">WYLOR Financeiro</p><h1 id="page-title">${title}</h1><p class="page-description">Contas e saldos iniciais cadastrados pela equipe autorizada.</p></div></div>
+  return `<section aria-labelledby="page-title"><div class="page-heading"><div><p class="eyebrow">WYLOR Financeiro</p><h1 id="page-title">${title}</h1><p class="page-description">Contas, saldos iniciais e status das contas da empresa.</p></div></div>
     <div class="accounts-layout"><section class="content-card"><div class="card-heading"><h2>Contas cadastradas</h2><span>${accounts.length} ${accounts.length === 1 ? 'conta' : 'contas'}</span></div>${rows}</section>
-    <section class="content-card account-form-card"><div class="card-heading"><h2>Adicionar conta bancária</h2><span>BRL</span></div><form id="account-form" class="data-form"><label>Nome da conta<input name="name" maxlength="120" autocomplete="off" placeholder="Ex.: Conta principal" required /></label><label>Banco ou instituição <span class="optional">Opcional</span><input name="bank_name" maxlength="120" autocomplete="organization" placeholder="Nome da instituição" /></label><label>Tipo de conta<select name="account_type" required><option value="checking">Conta corrente</option><option value="savings">Poupança</option><option value="payment">Conta de pagamento</option><option value="investment">Investimento</option><option value="other">Outra conta</option></select></label><div class="form-grid"><label>Saldo inicial <span class="optional">Opcional</span><input name="opening_balance" type="number" inputmode="decimal" step="0.01" placeholder="0,00" /></label><label>Data do saldo<input name="opening_balance_date" type="date" /></label></div><p class="form-hint">O saldo inicial é uma posição da conta, não uma receita.</p><p class="form-message" id="account-message" role="status" aria-live="polite"></p><button class="primary-button" type="submit">Salvar conta</button></form></section></div>
+    <section class="content-card account-form-card"><div class="card-heading"><h2>${editing ? 'Editar conta bancária' : 'Adicionar conta bancária'}</h2><span>BRL</span></div>${accountForm(editing)}</section></div>
   </section>`;
 }
 const metric = (label, note, icon, value = 'Módulo pendente') => `<article class="metric-card"><div class="metric-top"><span class="metric-label">${label}</span><span class="metric-icon">${svg(icon)}</span></div><div class="metric-value">${value}</div><div class="metric-note">${note}</div></article>`;
@@ -95,7 +122,7 @@ function renderDashboard() {
   const companyName = escapeHTML(appState.company?.fantasy_name || 'empresa');
   return `<section aria-labelledby="page-title">
     <div class="page-heading"><div><p class="eyebrow">Visão geral</p><h1 id="page-title">Dashboard</h1><p class="page-description">Acompanhe a saúde financeira de ${companyName} em um só lugar.</p></div><div class="period-label">${svg('calendar')}<span>Período atual</span></div></div>
-    <div class="setup-banner"><span class="banner-icon">${svg('alert')}</span><div><strong>Indicadores ligados aos dados da empresa</strong><p>O saldo usa as contas bancárias e os saldos iniciais informados. Receitas, despesas e compromissos serão conectados quando esses módulos forem desenvolvidos.</p>${appState.dataError ? '<button class="text-button" type="button" data-retry-data>Tentar carregar novamente</button>' : ''}</div></div>
+    <div class="setup-banner"><span class="banner-icon">${svg('alert')}</span><div><strong>Indicadores ligados aos dados da empresa</strong><p>O saldo atual considera os saldos iniciais das contas ativas. Como movimentações ainda não estão disponíveis, ele não inclui entradas ou saídas. Saldo inicial não é receita.</p>${appState.dataError ? '<button class="text-button" type="button" data-retry-data>Tentar carregar novamente</button>' : ''}</div></div>
     <div class="metrics-grid" aria-label="Indicadores financeiros sem dados disponíveis">
       ${metric('Saldo total das contas', balance.note, 'bank', balance.value)}
       ${metric('Receitas do mês', 'Aguardando o módulo de receitas', 'income')}
@@ -106,7 +133,7 @@ function renderDashboard() {
     </div>
     <div class="dashboard-grid">
       <section class="content-card" aria-labelledby="activity-heading"><div class="card-heading"><h2 id="activity-heading">Movimentação financeira</h2><span>Período atual</span></div>${emptyState('Nenhuma movimentação disponível','Quando os lançamentos estiverem configurados, a atividade financeira aparecerá aqui.')}</section>
-      <section class="content-card" aria-labelledby="accounts-heading"><div class="card-heading"><h2 id="accounts-heading">Contas bancárias</h2><span>Resumo</span></div>${emptyState('Nenhuma conta cadastrada','As contas bancárias da empresa serão exibidas nesta área.','bank')}</section>
+      <section class="content-card" aria-labelledby="accounts-heading"><div class="card-heading"><h2 id="accounts-heading">Contas bancárias</h2><a class="text-button" href="#bank_accounts">Ver módulo</a></div>${appState.accounts?.some(account => account.status === 'active') ? `<div class="account-list dashboard-account-list">${appState.accounts.filter(account => account.status === 'active').slice(0, 4).map(account => `<div class="account-row"><div class="account-main"><strong>${escapeHTML(account.name)}</strong><small>${escapeHTML(account.bank_name || accountTypeNames[account.account_type] || 'Conta bancária')}</small></div><div class="account-balance"><strong>${account.opening_balance === null ? 'Saldo pendente' : formatBRL(decimalToCents(account.opening_balance))}</strong><small>Saldo atual</small></div></div>`).join('')}</div>` : emptyState(appState.accounts === null ? 'Carregando contas' : 'Nenhuma conta ativa', appState.accounts === null ? 'Consultando as contas da empresa.' : 'Cadastre ou reative uma conta bancária.', 'bank')}</section>
     </div>
   </section>`;
 }
@@ -228,7 +255,7 @@ async function loadBankAccounts() {
   if (!appState.user || !appState.company || appState.accounts !== null) return;
   const companyId = appState.company.id;
   const { data, error } = await window.wylorSupabase.from('bank_accounts')
-    .select('id, name, bank_name, account_type, opening_balance, opening_balance_date, currency')
+    .select('id, name, bank_name, account_type, description, opening_balance, opening_balance_date, currency, status, updated_at')
     .eq('company_id', companyId).order('name');
   if (companyId !== appState.company?.id) return;
   if (error) {
@@ -238,6 +265,7 @@ async function loadBankAccounts() {
     appState.dataError = null;
     appState.accounts = data || [];
   }
+  if (appState.accountEditingId && !appState.accounts.some(account => account.id === appState.accountEditingId)) appState.accountEditingId = null;
   navigate();
 }
 async function createCompany(form) {
@@ -265,33 +293,70 @@ async function createCompany(form) {
   renderAppForCompany(data);
 }
 async function createBankAccount(form) {
+  if (appState.accountSaving) return;
   const values = new FormData(form);
-  const balance = String(values.get('opening_balance') || '').trim();
+  const balance = parseMoney(values.get('opening_balance'));
   const balanceDate = String(values.get('opening_balance_date') || '').trim();
-  if (Boolean(balance) !== Boolean(balanceDate)) {
-    setFormMessage('#account-message', 'Informe o valor e a data do saldo inicial, ou deixe os dois vazios.', true);
+  if (balance === null) {
+    setFormMessage('#account-message', 'Informe um valor em reais com até duas casas decimais.', true);
     return;
   }
+  if (Boolean(balance) !== Boolean(balanceDate)) {
+    setFormMessage('#account-message', 'Informe o valor e a data de referência do saldo inicial, ou deixe os dois vazios.', true);
+    return;
+  }
+  const editingAccount = appState.accounts?.find(account => account.id === form.dataset.editingId);
+  if (editingAccount?.status === 'active' && values.get('status') === 'inactive' && !window.confirm(`Desativar a conta “${editingAccount.name}”? Ela continuará disponível no histórico.`)) return;
   const button = form.querySelector('button[type="submit"]');
+  appState.accountSaving = true;
+  appState.accountNotice = '';
   button.disabled = true;
   button.textContent = 'Salvando...';
-  const { error } = await window.wylorSupabase.from('bank_accounts').insert({
-    company_id: appState.company.id,
+  const payload = {
     name: String(values.get('name')).trim(),
     bank_name: String(values.get('bank_name') || '').trim() || null,
     account_type: values.get('account_type'),
+    description: String(values.get('description') || '').trim() || null,
     opening_balance: balance || null,
-    opening_balance_date: balanceDate || null
-  });
-  if (error) {
+    opening_balance_date: balanceDate || null,
+    status: values.get('status')
+  };
+  const editingId = form.dataset.editingId;
+  const result = editingId
+    ? await window.wylorSupabase.from('bank_accounts').update(payload).eq('id', editingId).eq('company_id', appState.company.id).select('id').single()
+    : await window.wylorSupabase.from('bank_accounts').insert({ ...payload, company_id: appState.company.id }).select('id').single();
+  appState.accountSaving = false;
+  if (result.error) {
     button.disabled = false;
-    button.textContent = 'Salvar conta';
-    setFormMessage('#account-message', 'Não foi possível salvar a conta. Verifique as informações e tente novamente.', true);
+    button.textContent = editingId ? 'Salvar alterações' : 'Salvar conta';
+    setFormMessage('#account-message', 'Não foi possível salvar a conta. Verifique os campos e tente novamente.', true);
     return;
   }
+  appState.accountEditingId = null;
+  appState.accountNotice = editingId ? 'Alterações salvas.' : 'Conta cadastrada.';
   appState.accounts = null;
   appState.dataError = null;
-  navigate();
+  await loadBankAccounts();
+}
+async function setAccountStatus(accountId, status) {
+  if (appState.accountSaving) return;
+  const account = appState.accounts?.find(item => item.id === accountId);
+  if (!account || !appState.company) return;
+  if (status === 'inactive' && !window.confirm(`Desativar a conta “${account.name}”? Ela continuará disponível no histórico.`)) return;
+  appState.accountSaving = true;
+  appState.accountNotice = '';
+  const { error } = await window.wylorSupabase.from('bank_accounts').update({ status }).eq('id', accountId).eq('company_id', appState.company.id);
+  appState.accountSaving = false;
+  if (error) {
+    appState.dataError = 'Não foi possível atualizar o status da conta. Tente novamente.';
+    navigate();
+    return;
+  }
+  appState.accountEditingId = null;
+  appState.accountNotice = status === 'inactive' ? 'Conta desativada.' : 'Conta reativada.';
+  appState.accounts = null;
+  appState.dataError = null;
+  await loadBankAccounts();
 }
 async function submitAuth(form) {
   const action = form.dataset.authAction;
@@ -371,7 +436,25 @@ function handlePageClick(event) {
     appState.accounts = null;
     appState.dataError = null;
     navigate();
+    return;
   }
+  const editButton = event.target.closest('[data-edit-account]');
+  if (editButton) {
+    appState.accountNotice = '';
+    appState.accountEditingId = editButton.dataset.editAccount;
+    navigate();
+    return;
+  }
+  if (event.target.closest('[data-cancel-edit]')) {
+    appState.accountEditingId = null;
+    appState.accountNotice = '';
+    navigate();
+    return;
+  }
+  const deactivateButton = event.target.closest('[data-deactivate-account]');
+  if (deactivateButton) { setAccountStatus(deactivateButton.dataset.deactivateAccount, 'inactive'); return; }
+  const activateButton = event.target.closest('[data-activate-account]');
+  if (activateButton) { setAccountStatus(activateButton.dataset.activateAccount, 'active'); return; }
 }
 page.addEventListener('click', handlePageClick);
 page.addEventListener('submit', event => {

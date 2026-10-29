@@ -196,6 +196,17 @@ h1 { margin: 0; color: #f4f5f6; font-size: clamp(25px, 3vw, 31px); font-weight: 
 .account-main strong, .account-balance strong { overflow: hidden; color: #e5e8ea; font-size: 11px; font-weight: 550; text-overflow: ellipsis; white-space: nowrap; }
 .account-main small, .account-balance small { color: var(--muted); font-size: 10px; }
 .account-balance { justify-items: end; text-align: right; }
+.account-row.is-inactive { opacity: .68; }
+.account-status { margin-left: 6px; padding: 3px 6px; border: 1px solid #46614d; border-radius: 999px; color: #c1dcc8; font-size: 9px; font-weight: 500; vertical-align: middle; }
+.is-inactive .account-status { border-color: #5b6268; color: #c1c6ca; }
+.account-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 10px; }
+.danger-button { color: #edb9ac; }
+.dashboard-account-list { padding: 0 18px; }
+.dashboard-account-list .account-row { padding: 12px 0; }
+.data-form textarea { width: 100%; min-height: 74px; resize: vertical; padding: 10px 12px; border: 1px solid #3a4249; border-radius: 7px; outline: 0; color: #f0f2f3; background: #14181c; font: inherit; font-size: 12px; }
+.data-form textarea:focus { border-color: #89aa94; box-shadow: 0 0 0 2px #89aa9433; }
+.form-actions { display: grid; gap: 9px; }
+.secondary-button { min-height: 40px; border: 1px solid #485159; border-radius: 7px; color: #d7dcdf; background: #242a2f; font-size: 11px; cursor: pointer; }
 .account-form-card .data-form { padding: 17px 18px 19px; }
 .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
 .form-hint { margin: -2px 0 0; color: #aeb6bd; font-size: 10px; line-height: 1.5; }
@@ -214,6 +225,10 @@ h1 { margin: 0; color: #f4f5f6; font-size: clamp(25px, 3vw, 31px); font-weight: 
   .auth-security { margin-top: 23px; }
   .accounts-layout { grid-template-columns: 1fr; }
   .account-row { gap: 9px; }
+  .account-row { flex-wrap: wrap; }
+  .account-main { flex-basis: calc(100% - 48px); }
+  .account-balance { flex: 1; justify-items: start; padding-left: 42px; text-align: left; }
+  .account-actions { flex: 0 0 auto; align-self: center; }
   .account-row .module-symbol { width: 33px; height: 33px; flex-basis: 33px; }
   .account-balance strong { max-width: 132px; }
 }
