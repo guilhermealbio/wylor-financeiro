@@ -161,6 +161,11 @@ h1 { margin: 0; color: #f4f5f6; font-size: clamp(25px, 3vw, 31px); font-weight: 
 .data-form label { display: grid; gap: 7px; color: #d6dade; font-size: 11px; font-weight: 550; }
 .data-form input, .data-form select { width: 100%; min-height: 43px; padding: 0 12px; border: 1px solid #3a4249; border-radius: 7px; outline: 0; color: #f0f2f3; background: #14181c; font: inherit; font-size: 12px; }
 .data-form input::placeholder { color: #9099a1; }
+.password-field { position: relative; display: block; }
+.password-field input { padding-right: 76px; }
+.password-toggle { position: absolute; top: 50%; right: 8px; min-height: 32px; padding: 0 7px; transform: translateY(-50%); border: 0; border-radius: 5px; color: #c1dcc8; background: transparent; font-size: 11px; font-weight: 600; cursor: pointer; }
+.password-toggle:hover { background: #26322a; }
+.password-toggle:focus-visible { outline: 2px solid var(--green-bright); outline-offset: 1px; }
 .data-form input:focus, .data-form select:focus { border-color: #89aa94; box-shadow: 0 0 0 2px #89aa9433; }
 .data-form select { appearance: auto; }
 .field-hint, .optional { color: #aeb6bd; font-size: 10px; font-weight: 400; }

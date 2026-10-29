@@ -190,7 +190,7 @@ function setFormMessage(selector, message, isError = false) {
 function renderAuth(view = 'login', notice = '') {
   document.body.classList.add('auth-mode');
   const views = {
-    login: { title: 'Acesse sua conta', description: 'Entre para acompanhar as informações financeiras da WYLOR.', button: 'Entrar', fields: `<label>E-mail<input name="email" type="email" autocomplete="email" required /></label><label>Senha<input name="password" type="password" autocomplete="current-password" required /></label>`, links: `<button class="text-button" type="button" data-auth-view="forgot">Esqueci minha senha</button><span>Não tem uma conta? <button class="text-button" type="button" data-auth-view="signup">Criar conta</button></span>` },
+    login: { title: 'Acesse sua conta', description: 'Entre para acompanhar as informações financeiras da WYLOR.', button: 'Entrar', fields: `<label>E-mail<input name="email" type="email" autocomplete="email" required /></label><label>Senha<span class="password-field"><input name="password" type="password" autocomplete="current-password" required /><button class="password-toggle" type="button" data-toggle-password aria-label="Mostrar senha" aria-pressed="false">Mostrar</button></span></label>`, links: `<button class="text-button" type="button" data-auth-view="forgot">Esqueci minha senha</button><span>Não tem uma conta? <button class="text-button" type="button" data-auth-view="signup">Criar conta</button></span>` },
     signup: { title: 'Crie seu acesso', description: 'Use seu e-mail de trabalho. Enviaremos uma mensagem para confirmar o endereço.', button: 'Criar acesso', fields: `<label>Seu nome<input name="full_name" maxlength="120" autocomplete="name" required /></label><label>E-mail<input name="email" type="email" autocomplete="email" required /></label><label>Senha<input name="password" type="password" autocomplete="new-password" minlength="8" required /><small class="field-hint">Use pelo menos 8 caracteres.</small></label>`, links: `<span>Já tem uma conta? <button class="text-button" type="button" data-auth-view="login">Entrar</button></span>` },
     forgot: { title: 'Recuperar senha', description: 'Informe o e-mail da sua conta para receber um link seguro de recuperação.', button: 'Enviar link', fields: `<label>E-mail<input name="email" type="email" autocomplete="email" required /></label>`, links: `<button class="text-button" type="button" data-auth-view="login">Voltar para entrar</button>` },
     newPassword: { title: 'Defina uma nova senha', description: 'Escolha uma senha nova para acessar sua conta.', button: 'Salvar nova senha', fields: `<label>Nova senha<input name="password" type="password" autocomplete="new-password" minlength="8" required /></label><label>Confirme a nova senha<input name="password_confirm" type="password" autocomplete="new-password" minlength="8" required /></label>`, links: '' }
@@ -413,6 +413,16 @@ async function submitAuth(form) {
   }
 }
 function handlePageClick(event) {
+  const passwordToggle = event.target.closest('[data-toggle-password]');
+  if (passwordToggle) {
+    const passwordInput = passwordToggle.parentElement.querySelector('input');
+    const isVisible = passwordInput.type === 'password';
+    passwordInput.type = isVisible ? 'text' : 'password';
+    passwordToggle.textContent = isVisible ? 'Ocultar' : 'Mostrar';
+    passwordToggle.setAttribute('aria-label', isVisible ? 'Ocultar senha' : 'Mostrar senha');
+    passwordToggle.setAttribute('aria-pressed', String(isVisible));
+    return;
+  }
   const viewButton = event.target.closest('[data-auth-view]');
   if (viewButton) {
     renderAuth(viewButton.dataset.authView);
