@@ -84,8 +84,6 @@ create policy "companies: owner e admin alteram" on public.companies
   with check (public.is_company_member(id, array['owner','admin']::text[]));
 create policy "company_members: integrantes consultam" on public.company_members
   for select to authenticated using (public.is_company_member(company_id));
--- Novos integrantes entram somente pela função abaixo. Não há políticas de
--- INSERT ou UPDATE para clientes, então usuários comuns não podem se promover.
 create policy "company_members: integrantes saem ou admin remove" on public.company_members
   for delete to authenticated
   using (user_id = (select auth.uid()) or public.is_company_member(company_id, array['owner','admin']::text[]));
@@ -102,68 +100,12 @@ revoke execute on function public.add_company_owner() from public, anon, authent
 create or replace trigger company_add_creator_as_owner after insert on public.companies
   for each row execute function public.add_company_owner();
 
--- Adiciona uma conta Auth existente. Owner e admin podem incluir member/viewer;
--- somente owner pode conceder admin. Owner só nasce ao criar a empresa.
-create or replace function public.add_company_member(
-  target_company_id uuid,
-  target_email text,
-  target_role text default 'member'
-) returns uuid
-language plpgsql security definer set search_path = '' as $$
-declare
-  actor_role text;
-  target_user_id uuid;
-  new_member_id uuid;
-begin
-  select member_row.role into actor_role
-  from public.company_members member_row
-  where member_row.company_id = target_company_id
-    and member_row.user_id = (select auth.uid());
-
-  if actor_role is null or actor_role not in ('owner','admin') then
-    raise exception 'Somente owner ou admin pode adicionar integrantes.' using errcode = '42501';
-  end if;
-  if target_role is null or target_role not in ('member','viewer','admin') then
-    raise exception 'O papel solicitado não pode ser atribuído por esta função.' using errcode = '22023';
-  end if;
-  if target_role = 'admin' and actor_role <> 'owner' then
-    raise exception 'Somente owner pode conceder o papel de admin.' using errcode = '42501';
-  end if;
-
-  select auth_user.id into target_user_id
-  from auth.users auth_user
-  where lower(auth_user.email) = lower(trim(target_email));
-  if target_user_id is null then
-    raise exception 'Esta pessoa ainda não tem uma conta no WYLOR Financeiro.' using errcode = 'P0002';
-  end if;
-
-  insert into public.company_members (company_id, user_id, role)
-  values (target_company_id, target_user_id, target_role)
-  returning id into new_member_id;
-  return new_member_id;
-exception
-  when unique_violation then
-    raise exception 'Esta pessoa já participa da empresa.' using errcode = '23505';
-end $$;
-revoke execute on function public.add_company_member(uuid, text, text) from public, anon;
-grant execute on function public.add_company_member(uuid, text, text) to authenticated;
-
 create or replace function public.protect_last_company_owner() returns trigger
 language plpgsql security definer set search_path = '' as $$
 declare
   locked_company_id uuid;
-  owner_is_being_removed boolean := false;
 begin
-  if tg_op = 'UPDATE' then
-    if new.company_id is distinct from old.company_id then
-      raise exception 'A participação não pode ser movida para outra empresa.' using errcode = '23514';
-    end if;
-    owner_is_being_removed := old.role = 'owner' and new.role is distinct from old.role;
-  else
-    owner_is_being_removed := old.role = 'owner';
-  end if;
-
-  if owner_is_being_removed then
+  if old.role = 'owner' and (tg_op = 'DELETE' or new.role <> 'owner') then
     select company_row.id into locked_company_id
     from public.companies company_row
     where company_row.id = old.company_id
@@ -172,13 +114,12 @@ begin
       select 1 from public.company_members other_owner
       where other_owner.company_id = old.company_id
         and other_owner.role = 'owner'
-        and other_owner.user_id <> old.user_id
+        and other_owner.id <> old.id
     ) then
       raise exception 'A empresa precisa manter pelo menos um owner.' using errcode = 'P0001';
     end if;
   end if;
-  if tg_op = 'DELETE' then return old; end if;
-  return new;
+  return coalesce(new, old);
 end $$;
 revoke execute on function public.protect_last_company_owner() from public, anon, authenticated;
 create or replace trigger company_members_protect_last_owner before update or delete on public.company_members
@@ -279,10 +220,7 @@ begin
     company_key := (changed_row ->> 'company_id')::uuid;
   end if;
   entity_key := (changed_row ->> 'id')::uuid;
-  -- Exclusões em cascata após remover a empresa não devem criar auditoria
-  -- órfã: audit_logs também pertence à empresa e seria removida na cascata.
-  if company_key is not null and entity_key is not null
-     and exists (select 1 from public.companies company_row where company_row.id = company_key) then
+  if company_key is not null and entity_key is not null then
     insert into public.audit_logs (company_id, actor_user_id, action, entity, entity_id)
     values (company_key, (select auth.uid()), lower(tg_op), tg_table_name, entity_key);
   end if;

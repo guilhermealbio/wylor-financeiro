@@ -98,15 +98,7 @@ begin
     if old.company_id <> new.company_id or old.kind <> new.kind or old.request_key <> new.request_key then raise exception 'Empresa, tipo e chave do lançamento não podem ser alterados'; end if;
     if old.status in ('paid','received') and new.status not in ('paid','received','cancelled') then raise exception 'Estorne o lançamento antes de alterar seu estado'; end if;
     if old.status = 'cancelled' and new.status <> 'cancelled' then raise exception 'Um lançamento cancelado não pode ser reaberto'; end if;
-    if old.status in ('paid','received') and (
-      old.amount <> new.amount
-      or old.bank_account_id is distinct from new.bank_account_id
-      or old.category_id <> new.category_id
-      or old.competence_date <> new.competence_date
-      or old.due_date is distinct from new.due_date
-      or old.settled_at is distinct from new.settled_at
-      or old.description <> new.description
-    ) then raise exception 'Cancele e registre um novo lançamento para corrigir dados liquidados'; end if;
+    if old.status in ('paid','received') and (old.amount <> new.amount or old.bank_account_id is distinct from new.bank_account_id or old.category_id <> new.category_id or old.competence_date <> new.competence_date) then raise exception 'Cancele e registre um novo lançamento para corrigir dados liquidados'; end if;
     snapshot_before := to_jsonb(old);
   end if;
   return new;
