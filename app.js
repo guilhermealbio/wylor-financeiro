@@ -670,6 +670,10 @@ page.addEventListener('change', event => {
 });
 document.querySelector('#logout-button').addEventListener('click', () => window.wylorSupabase?.auth.signOut());
 async function initializeSupabase() {
+  if (window.WYLOR_SUPABASE_CONFIG?.environment === 'test') {
+    document.querySelector('#environment-banner')?.removeAttribute('hidden');
+    document.body.classList.add('is-test-environment');
+  }
   if (!window.supabase?.createClient || !window.WYLOR_SUPABASE_CONFIG?.url || !window.WYLOR_SUPABASE_CONFIG?.anonKey) {
     renderAuth('login', 'Não foi possível carregar a conexão segura. Atualize a página em alguns instantes.');
     return;

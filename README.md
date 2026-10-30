@@ -4,7 +4,15 @@ Aplicação web estática com autenticação e acesso ao Supabase pelo navegador
 
 ## Iniciar
 
-Execute `npm run build`. A versão pronta fica em `dist/`.
+Execute `npm run build`. Por padrão, ele usa o Supabase de produção já configurado no `.env`. A versão pronta fica em `dist/`.
+
+## Ambiente de testes Supabase
+
+Crie um segundo projeto Supabase separado, com região e senha próprias. Não reutilize o projeto, banco, usuários nem credenciais de produção. No projeto novo, aplique em ordem todos os arquivos de `supabase/migrations/` e configure a autenticação e os URLs de retorno para o endereço usado nos testes. As migrações criam as tabelas, funções e políticas RLS do app; confira o esquema e RLS no projeto de teste antes de cadastrar usuários ou dados.
+
+Copie `.env.test.example` para `.env.test` e preencha apenas `WY_TEST_SUPABASE_URL` e `WY_TEST_SUPABASE_ANON_KEY` com os valores públicos do projeto de teste. Nunca use `service_role`, `sb_secret_` ou senha do banco. O arquivo `.env.test` é ignorado pelo Git. Gere uma cópia de teste separada com `npm run build -- --environment=test`; o build falha se faltarem valores válidos ou se a URL de teste apontar ao mesmo projeto que produção. A cópia de teste mostra um aviso persistente. Para voltar a gerar produção, execute `npm run build`.
+
+As chaves `anon` e `publishable` são públicas e podem aparecer no navegador do ambiente correspondente; a segurança depende de RLS. Este processo não coloca chaves administrativas no frontend. Nunca publique o build de teste como produção. O projeto de teste precisa ter Auth habilitado e URLs de retorno próprias. Não cadastre dados reais de clientes.
 
 ## Primeiro acesso
 
