@@ -1,9 +1,48 @@
 -- Corrige ajustes feitos depois da aplicação das migrações anteriores.
 -- Novos integrantes entram somente pela função controlada; não há políticas
 -- de INSERT ou UPDATE para clientes na tabela company_members.
-create policy "company_members: integrantes saem ou admin remove" on public.company_members
-  for delete to authenticated
-  using (user_id = (select auth.uid()) or public.is_company_member(company_id, array['owner','admin']::text[]));
+-- A política é verificada antes de ser criada ou alinhada. Objetos com outra
+-- tabela, comando, papel ou permissividade causam parada para revisão manual.
+do $$
+declare
+  existing_policy record;
+  normalized_qual text;
+begin
+  select policyname, permissive, roles, cmd, qual
+    into existing_policy
+  from pg_catalog.pg_policies
+  where schemaname = 'public'
+    and tablename = 'company_members'
+    and policyname = 'company_members: integrantes saem ou admin remove';
+
+  if not found then
+    create policy "company_members: integrantes saem ou admin remove"
+      on public.company_members
+      for delete to authenticated
+      using (user_id = (select auth.uid()) or public.is_company_member(company_id, array['owner','admin']::text[]));
+  else
+    normalized_qual := lower(existing_policy.qual);
+    normalized_qual := regexp_replace(normalized_qual, '::(pg_catalog\.)?text(\[\])?', '', 'g');
+    normalized_qual := regexp_replace(normalized_qual, 'public\.', '', 'g');
+    normalized_qual := regexp_replace(normalized_qual, 'as uid', '', 'g');
+    normalized_qual := regexp_replace(normalized_qual, $pattern$[[:space:]()']$pattern$, '', 'g');
+
+    if existing_policy.cmd <> 'DELETE'
+       or existing_policy.permissive <> 'PERMISSIVE'
+       or existing_policy.roles <> array['authenticated']::name[]
+       or existing_policy.qual is null
+       or normalized_qual is distinct from 'user_id=selectauth.uid()oris_company_member(company_id,array[owner,admin])' then
+      raise exception 'A política existente tem comando, permissividade, papel ou regra inesperada; interrompida sem alteração.'
+        using errcode = '55000';
+    end if;
+
+    -- Mantém a política existente e atualiza sua condição à regra esperada.
+    alter policy "company_members: integrantes saem ou admin remove"
+      on public.company_members
+      to authenticated
+      using (user_id = (select auth.uid()) or public.is_company_member(company_id, array['owner','admin']::text[]));
+  end if;
+end $$;
 
 create or replace function public.add_company_member(
   target_company_id uuid,
@@ -19,7 +58,8 @@ begin
   select member_row.role into actor_role
   from public.company_members member_row
   where member_row.company_id = target_company_id
-    and member_row.user_id = (select auth.uid());
+    and member_row.user_id = (select auth.uid())
+  for update;
 
   if actor_role is null or actor_role not in ('owner','admin') then
     raise exception 'Somente owner ou admin pode adicionar integrantes.' using errcode = '42501';
@@ -40,11 +80,12 @@ begin
 
   insert into public.company_members (company_id, user_id, role)
   values (target_company_id, target_user_id, target_role)
+  on conflict (company_id, user_id) do nothing
   returning id into new_member_id;
-  return new_member_id;
-exception
-  when unique_violation then
+  if new_member_id is null then
     raise exception 'Esta pessoa já participa da empresa.' using errcode = '23505';
+  end if;
+  return new_member_id;
 end $$;
 revoke execute on function public.add_company_member(uuid, text, text) from public, anon;
 grant execute on function public.add_company_member(uuid, text, text) to authenticated;
@@ -73,7 +114,7 @@ begin
       select 1 from public.company_members other_owner
       where other_owner.company_id = old.company_id
         and other_owner.role = 'owner'
-        and other_owner.user_id <> old.user_id
+        and other_owner.id <> old.id
     ) then
       raise exception 'A empresa precisa manter pelo menos um owner.' using errcode = 'P0001';
     end if;
