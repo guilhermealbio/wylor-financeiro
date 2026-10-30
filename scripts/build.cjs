@@ -39,11 +39,11 @@ function isPublicSupabaseKey(key) {
 }
 
 async function validateTestConnection(url, key) {
-  const endpoint = new URL('/rest/v1/', url);
+  const endpoint = new URL('/rest/v1/companies?select=id&limit=0', url);
   let response;
   try {
     response = await fetch(endpoint, {
-      headers: { apikey: key, Accept: 'application/openapi+json, application/json' },
+      headers: { apikey: key, Accept: 'application/json' },
       signal: AbortSignal.timeout(10000),
     });
   } catch {
@@ -52,7 +52,13 @@ async function validateTestConnection(url, key) {
   if (response.status === 401 || response.status === 403) {
     throw new Error('O Supabase recusou a chave pública de teste. Confira se ela pertence ao projeto informado. Nenhuma migração foi executada.');
   }
-  if (!response.ok) {
+  if (response.status === 404) {
+    let payload;
+    try { payload = await response.json(); } catch { payload = null; }
+    if (payload?.code !== 'PGRST205' || payload?.message !== "Could not find the table 'public.companies' in the schema cache") {
+      throw new Error('O projeto respondeu, mas a consulta de validação recebeu um erro inesperado. Nenhuma migração foi executada.');
+    }
+  } else if (!response.ok) {
     throw new Error(`O Supabase de teste respondeu HTTP ${response.status}. Confira a URL e a chave pública antes de migrar. Nenhuma migração foi executada.`);
   }
   if (new URL(response.url).origin !== endpoint.origin) {
