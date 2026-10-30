@@ -38,6 +38,28 @@ function isPublicSupabaseKey(key) {
   }
 }
 
+async function validateTestConnection(url, key) {
+  const endpoint = new URL('/rest/v1/', url);
+  let response;
+  try {
+    response = await fetch(endpoint, {
+      headers: { apikey: key, Accept: 'application/openapi+json, application/json' },
+      signal: AbortSignal.timeout(10000),
+    });
+  } catch {
+    throw new Error('Não foi possível alcançar o Supabase de teste. Confira a URL e a conexão de rede. Nenhuma migração foi executada.');
+  }
+  if (response.status === 401 || response.status === 403) {
+    throw new Error('O Supabase recusou a chave pública de teste. Confira se ela pertence ao projeto informado. Nenhuma migração foi executada.');
+  }
+  if (!response.ok) {
+    throw new Error(`O Supabase de teste respondeu HTTP ${response.status}. Confira a URL e a chave pública antes de migrar. Nenhuma migração foi executada.`);
+  }
+  if (new URL(response.url).origin !== endpoint.origin) {
+    throw new Error('A validação foi redirecionada para outro endereço e foi interrompida. Nenhuma migração foi executada.');
+  }
+}
+
 const requestedEnvironment = process.argv.slice(2).find(arg => arg.startsWith('--environment='))?.split('=')[1] || 'production';
 if (!['production', 'test'].includes(requestedEnvironment)) throw new Error('Use --environment=production ou --environment=test.');
 const productionEnv = readEnvFile('.env');
@@ -50,10 +72,23 @@ if (!supabaseUrl || !supabaseAnonKey) throw new Error(`Faltam ${urlKey} e/ou ${a
 if (!projectRef(supabaseUrl) || !isPublicSupabaseKey(supabaseAnonKey)) throw new Error('A URL ou a chave pública do Supabase tem formato inválido. Use apenas a chave anon/publishable, nunca service_role ou sb_secret_.');
 if (requestedEnvironment === 'test' && projectRef(supabaseUrl) === projectRef(productionEnv.VITE_SUPABASE_URL || '')) throw new Error('O projeto de teste precisa ter uma URL Supabase diferente da produção.');
 
-fs.rmSync(output, { recursive: true, force: true });
-fs.mkdirSync(output, { recursive: true });
-for (const file of ['index.html', 'styles.css', 'app.js', 'odim-paginas.json']) {
-  fs.copyFileSync(path.join(root, file), path.join(output, file));
+function writeBuild() {
+  fs.rmSync(output, { recursive: true, force: true });
+  fs.mkdirSync(output, { recursive: true });
+  for (const file of ['index.html', 'styles.css', 'app.js', 'odim-paginas.json']) {
+    fs.copyFileSync(path.join(root, file), path.join(output, file));
+  }
+  fs.cpSync(path.join(root, 'assets'), path.join(output, 'assets'), { recursive: true });
+  fs.writeFileSync(path.join(output, 'assets', 'supabase-config.js'), `window.WYLOR_SUPABASE_CONFIG = Object.freeze(${JSON.stringify({ url: supabaseUrl, anonKey: supabaseAnonKey, environment: requestedEnvironment })});\n`);
 }
-fs.cpSync(path.join(root, 'assets'), path.join(output, 'assets'), { recursive: true });
-fs.writeFileSync(path.join(output, 'assets', 'supabase-config.js'), `window.WYLOR_SUPABASE_CONFIG = Object.freeze(${JSON.stringify({ url: supabaseUrl, anonKey: supabaseAnonKey, environment: requestedEnvironment })});\n`);
+
+if (requestedEnvironment === 'test') {
+  validateTestConnection(supabaseUrl, supabaseAnonKey)
+    .then(writeBuild)
+    .catch(error => {
+      console.error(error.message);
+      process.exitCode = 1;
+    });
+} else {
+  writeBuild();
+}
